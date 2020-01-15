@@ -1,17 +1,19 @@
 import torch
 import numpy as np
 from torchvision.models import quantization
+from torchvision import models
 from tvm import relay
 
-
 model = quantization.resnet.resnet18(pretrained=True, quantize=True)
+# model = models.resnet.resnet18(pretrained=True)
 model.to("cpu")
 
 input_size = (1, 3, 224, 224)
 inp = np.random.randn(*input_size).astype(np.float32)
 x = torch.from_numpy(inp)
 trace = torch.jit.trace(model, x).float().eval()
-print(trace)
+torch._C._jit_pass_inline(trace.graph)
+# print(trace)
 
 # QuantizableResNet(
 #   original_name=QuantizableResNet
