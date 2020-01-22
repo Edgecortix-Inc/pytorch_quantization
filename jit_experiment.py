@@ -5,7 +5,9 @@ from torch.quantization import default_qconfig, quantize, default_eval_fn
 from torch.quantization._quantize_script import quantize_script
 from torchvision.models import quantization
 from torchvision import models
+import tvm
 from tvm import relay
+from tvm.relay import expr as _expr
 
 
 class ConvModel(torch.nn.Module):
@@ -86,6 +88,88 @@ def test_resnet():
     # quantize_and_run(annotated_model, raw_model, img_data)
 
 
+def parse_trace(trace, input_shapes):
+    inputs_r = {}
+    params = {}
+    param_tensors = {}
+    fn_param = []
+    consts = {}
+    ops = {}
+    op_inputs_r = {}
+    op_inputs_types = {}
+    op_inputs_otypes = {}
+    relay_map = {}
+    nid_to_node_name = {}
+
+    def parse_inputs():
+        # Get names and objects of inputs for IR
+        ir_names = [i.debugName() for i in trace.graph.inputs()]
+        ir_inputs = [i for i in trace.graph.inputs()]
+
+        # Create corresponding shape and add to input
+        for input_name, ir_input in zip(input_shapes, ir_inputs[1:]):
+            input_shape = input_shapes[input_name]
+            ir_input.setDebugName(input_name)
+            inputs_r[input_name] = _expr.var(input_name,
+                                             shape=input_shapes[input_name])
+            fn_param.append(_expr.var(input_name,
+                                      shape=input_shapes[input_name]))
+        # Add self (first input of a PyTorch graph) to inputs
+        input_shape = [3]
+        tensor = tvm.nd.array(np.zeros(input_shape).astype(np.float32))
+        input_name = ir_names[0]
+        inputs_r[input_name] = tensor
+
+    def parse_params():
+        state_dict = trace.state_dict()
+        param_names = []
+        for key, value in state_dict.items():
+            param_str = str(key)
+            param_name = param_str.split('.')[-1]
+            param_names.append(param_name)
+            print(param_names[-1])
+
+        # Get names of all inputs
+        input_names = [i for i in inputs_r.keys()]
+
+        # Iterate through graph for getAttr nodes and match full state_dict name to nodes
+        node_weight_map = {}
+        for node in trace.graph.nodes():
+            if node.kind() == "prim::GetAttr":
+                node_str = str(node)
+                node_assign = (node_str.split(' = ')[0]).split(' : ')
+                node_name = (node_assign[0])[1:]
+                node_getattr_name = ((node_str.split(' = ')[1]).split('"')[1::2])[0]
+                node_arg = (((node_str.split(' = '))[1]).split('(')[1])[1:-2]
+                print("node_name, node_getattr_name, node_arg", node_name, node_getattr_name, node_arg)
+                if node_arg in input_names:
+                    node_weight_map[node_name] = node_getattr_name
+                else:
+                    previous_map = node_weight_map[node_arg[:]]
+                    node_weight_map[node_name] = previous_map+"."+node_getattr_name
+
+                if node_getattr_name in param_names:
+
+                    print("Looking up node_name:", node_weight_map[node_name])
+                    value = state_dict[node_weight_map[node_name]]
+                    tensor = tvm.nd.array(value.cpu().numpy())
+                    shape = tensor.shape
+                    param_tensors[node_name] = tensor
+
+                    params[node_name] = _expr.var(node_name,
+                                                        shape=shape)
+
+                    fn_param.append(_expr.var(node_name,
+                                                    shape=shape))
+
+        print("printing node_weight_map")
+        for (k, v) in node_weight_map.items():
+            print(k, v)
+
+    parse_inputs()
+    parse_params()
+
+
 def test_parse_param():
     conv_layer = ConvModel().eval()
     img_data = [(torch.rand(1, 3, 224, 224, dtype=torch.float),
@@ -97,7 +181,7 @@ def test_parse_param():
 
     input_name = 'input.1'
     shape_dict = {input_name: (1, 3, 224, 224)}
-    mod, params = relay.frontend.from_pytorch(trace, shape_dict)
+    parse_trace(trace, shape_dict)
 
     model_quantized = quantize_script(
         trace,
@@ -107,11 +191,10 @@ def test_parse_param():
         inplace=False)
 
     print(model_quantized.graph)
-    state_dict = model_quantized.state_dict()
-    for (k, v) in state_dict.items():
-        print(k, v.size())
-
-    mod, params = relay.frontend.from_pytorch(model_quantized, shape_dict)
+    parse_trace(model_quantized, shape_dict)
+    # state_dict = model_quantized.state_dict()
+    # for (k, v) in state_dict.items():
+    #     print(k, v.size())
 
 
 # test_conv()
