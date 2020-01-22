@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 from torch.quantization import QuantStub, DeQuantStub
 from torch.quantization import default_qconfig, quantize, default_eval_fn
 from torch.quantization._quantize_script import quantize_script
@@ -36,6 +37,35 @@ class AnnotatedConvModel(torch.nn.Module):
 
     def fuse_model(self):
         pass
+
+
+class ConvBNReLU(nn.Sequential):
+    def __init__(self, in_planes, out_planes, kernel_size=3, stride=1, groups=1):
+        padding = (kernel_size - 1) // 2
+        super().__init__(
+            nn.Conv2d(in_planes, out_planes, kernel_size, stride, padding, groups=groups, bias=False),
+            nn.BatchNorm2d(out_planes, momentum=0.1),
+            # Replace with ReLU
+            nn.ReLU(inplace=False)
+        )
+
+
+class AnnotatedConvBnModel(torch.nn.Module):
+    def __init__(self):
+        super(AnnotatedConvBnModel, self).__init__()
+        self.qconfig = default_qconfig
+        self.block = ConvBNReLU(3, 2)
+        self.quant = QuantStub()
+        self.dequant = DeQuantStub()
+
+    def forward(self, x):
+        x = self.quant(x)
+        x = self.block(x)
+        x = self.dequant(x)
+        return x
+
+    def fuse_model(self):
+        torch.quantization.fuse_modules(self.block, ['0', '1', '2'], inplace=True)
 
 
 def quantize_and_run(annotated_model, raw_model, img_data, do_eager=False):
@@ -163,32 +193,35 @@ def parse_trace(trace, input_shapes):
                     fn_param.append(_expr.var(node_name,
                                               shape=shape))
 
-        print("\nparse trace: parsed following paramters")
-        for (k, v) in node_weight_map.items():
-            print(k, v)
+        # print("\nparse trace: parsed following paramters")
+        # for (k, v) in node_weight_map.items():
+        #     print(k, v)
 
     parse_inputs()
     parse_params()
 
 
 def test_parse_param():
-    conv_layer = ConvModel().eval()
     img_data = [(torch.rand(1, 3, 224, 224, dtype=torch.float),
                  torch.randint(0, 1, (2,), dtype=torch.long))
                 for _ in range(5)]
-    trace = torch.jit.trace(conv_layer, img_data[0][0])
-    torch._C._jit_pass_inline(trace.graph)
-    print("\nJit graph before quantization")
-    print(trace.graph)
-
     input_name = 'input.1'
     shape_dict = {input_name: (1, 3, 224, 224)}
-    parse_trace(trace, shape_dict)
 
     def test_quant_eager():
-        annotated_conv_model = AnnotatedConvModel().eval()
+        annotated_conv_model = AnnotatedConvBnModel().eval()
+        trace = torch.jit.trace(annotated_conv_model, img_data[0][0])
+        torch._C._jit_pass_inline(trace.graph)
+        print("\nOriginal ConvBnReLU graph")
+        print(trace.graph)
+        parse_trace(trace, shape_dict)
+
+        print("\nOriginal ConvBnReLU parameters")
+        for (k, v) in annotated_conv_model.state_dict().items():
+            print(k, v)
+
         qutils.quantize_model(annotated_conv_model, "fbgemm")
-        print("\nQuantized conv parameters before jit")
+        print("\nQuantized fused parameters before jit")
         for (k, v) in annotated_conv_model.state_dict().items():
             print(k, v)
 
@@ -200,19 +233,25 @@ def test_parse_param():
 
         parse_trace(qtrace, shape_dict)
 
-        print("\nQuantized conv parameters after jit")
+        print("\nQuantized fused parameters after jit")
         for (k, v) in qtrace.state_dict().items():
             if k.endswith("_packed_params"):
                 qweight, _ = torch.ops.quantized.conv2d_unpack(v)
                 scales = qweight.q_per_channel_scales()
                 zero_points = qweight.q_per_channel_zero_points()
-                print("conv weight:", qweight)
-                print("conv scales:", scales)
-                print("conv zero points:", zero_points)
+                print("%s weight:" % k, qweight)
+                print("%s scales:" % k, scales)
+                print("%s zero points:" % k, zero_points)
             else:
                 print(k, v)
 
     def test_quant_script():
+        conv_layer = ConvModel().eval()
+        trace = torch.jit.trace(conv_layer, img_data[0][0])
+        torch._C._jit_pass_inline(trace.graph)
+        print("\nJit graph before quantization")
+        print(trace.graph)
+
         model_quantized = quantize_script(
             trace,
             {'': default_qconfig},
