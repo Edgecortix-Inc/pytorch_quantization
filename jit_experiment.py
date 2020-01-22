@@ -1,13 +1,16 @@
 import numpy as np
 import torch
-from torch.quantization import QuantStub, DeQuantStub, default_qconfig, quantize, default_eval_fn
+from torch.quantization import QuantStub, DeQuantStub
+from torch.quantization import default_qconfig, quantize, default_eval_fn
 from torch.quantization._quantize_script import quantize_script
+from torchvision.models import quantization
+from torchvision import models
 
 
 class ConvModel(torch.nn.Module):
     def __init__(self):
         super(ConvModel, self).__init__()
-        self.conv = torch.nn.Conv2d(3, 5, 3, bias=False).to(dtype=torch.float)
+        self.conv = torch.nn.Conv2d(3, 16, 3, bias=False).to(dtype=torch.float)
 
     def forward(self, x):
         x = self.conv(x)
@@ -18,7 +21,7 @@ class AnnotatedConvModel(torch.nn.Module):
     def __init__(self):
         super(AnnotatedConvModel, self).__init__()
         self.qconfig = default_qconfig
-        self.conv = torch.nn.Conv2d(3, 5, 3, bias=False).to(dtype=torch.float)
+        self.conv = torch.nn.Conv2d(3, 16, 3, bias=False).to(dtype=torch.float)
         self.quant = QuantStub()
         self.dequant = DeQuantStub()
 
@@ -29,23 +32,14 @@ class AnnotatedConvModel(torch.nn.Module):
         return x
 
 
-def test_conv():
-    img_data = [(torch.rand(2, 3, 10, 10, dtype=torch.float),
-                 torch.randint(0, 1, (2,), dtype=torch.long))
-                for _ in range(2)]
-    # eager mode
-    annotated_conv_model = AnnotatedConvModel().eval()
-    conv_model = ConvModel().eval()
-    # copy the weight from eager mode so that we can
-    # compare the result of the two quantized models later
-    conv_model.conv.weight = torch.nn.Parameter(annotated_conv_model.conv.weight.detach())
-    model_eager = quantize(annotated_conv_model, default_eval_fn,
+def quantize_and_run(annotated_model, raw_model, img_data):
+    model_eager = quantize(annotated_model, default_eval_fn,
                            img_data)
     result_eager = model_eager(img_data[0][0])
 
     qconfig_dict = {'': default_qconfig}
-    model_traced = torch.jit.trace(conv_model, img_data[0][0])
-    model_script = torch.jit.script(conv_model)
+    model_traced = torch.jit.trace(raw_model, img_data[0][0])
+    model_script = torch.jit.script(raw_model)
 
     model_quantized = quantize_script(
         model_traced,
@@ -68,6 +62,20 @@ def test_conv():
 
     torch._C._jit_pass_inline(model_quantized.graph)
     print(model_quantized.graph)
+
+
+def test_conv():
+    img_data = [(torch.rand(2, 3, 10, 10, dtype=torch.float),
+                 torch.randint(0, 1, (2,), dtype=torch.long))
+                for _ in range(2)]
+    # eager mode
+    annotated_conv_model = AnnotatedConvModel().eval()
+    conv_model = ConvModel().eval()
+    # copy the weight from eager mode so that we can
+    # compare the result of the two quantized models later
+    conv_model.conv.weight = torch.nn.Parameter(annotated_conv_model.conv.weight.detach())
+
+    quantize_and_run(annotated_conv_model, conv_model, img_data)
 
 
 test_conv()
