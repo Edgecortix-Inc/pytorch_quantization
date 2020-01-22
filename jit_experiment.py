@@ -32,11 +32,7 @@ class AnnotatedConvModel(torch.nn.Module):
         return x
 
 
-def quantize_and_run(annotated_model, raw_model, img_data):
-    model_eager = quantize(annotated_model, default_eval_fn,
-                           img_data)
-    result_eager = model_eager(img_data[0][0])
-
+def quantize_and_run(annotated_model, raw_model, img_data, do_eager=False):
     qconfig_dict = {'': default_qconfig}
     model_traced = torch.jit.trace(raw_model, img_data[0][0])
     model_script = torch.jit.script(raw_model)
@@ -57,25 +53,37 @@ def quantize_and_run(annotated_model, raw_model, img_data):
         inplace=False)
     result_script = model_quantized(img_data[0][0])
 
-    np.allclose(result_traced.numpy(), result_eager.numpy())
-    np.allclose(result_script.numpy(), result_eager.numpy())
-
     torch._C._jit_pass_inline(model_quantized.graph)
     print(model_quantized.graph)
+
+    if do_eager:
+        model_eager = quantize(annotated_model, default_eval_fn,
+                               img_data)
+        result_eager = model_eager(img_data[0][0])
+        np.allclose(result_traced.numpy(), result_eager.numpy())
+        np.allclose(result_script.numpy(), result_eager.numpy())
 
 
 def test_conv():
     img_data = [(torch.rand(2, 3, 10, 10, dtype=torch.float),
                  torch.randint(0, 1, (2,), dtype=torch.long))
                 for _ in range(2)]
-    # eager mode
     annotated_conv_model = AnnotatedConvModel().eval()
     conv_model = ConvModel().eval()
-    # copy the weight from eager mode so that we can
-    # compare the result of the two quantized models later
     conv_model.conv.weight = torch.nn.Parameter(annotated_conv_model.conv.weight.detach())
 
-    quantize_and_run(annotated_conv_model, conv_model, img_data)
+    quantize_and_run(annotated_conv_model, conv_model, img_data, do_eager=True)
+
+
+def test_resnet():
+    img_data = [(torch.rand(1, 3, 224, 224, dtype=torch.float),
+                 torch.randint(0, 1, (2,), dtype=torch.long))
+                for _ in range(5)]
+    annotated_model = quantization.resnet.resnet18(pretrained=True).eval()
+    raw_model = models.resnet.resnet18(pretrained=True).eval()
+    # does not work yet
+    # quantize_and_run(annotated_model, raw_model, img_data)
 
 
 test_conv()
+test_resnet()
