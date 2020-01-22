@@ -1,19 +1,19 @@
-import numpy as np
 import torch
 from torch.quantization import QuantStub, DeQuantStub
 from torch.quantization import default_qconfig, quantize, default_eval_fn
 from torch.quantization._quantize_script import quantize_script
-from torchvision.models import quantization
+from torchvision.models.quantization import resnet as qresnet, utils as qutils
 from torchvision import models
+
+import numpy as np
 import tvm
-from tvm import relay
 from tvm.relay import expr as _expr
 
 
 class ConvModel(torch.nn.Module):
     def __init__(self):
         super(ConvModel, self).__init__()
-        self.conv = torch.nn.Conv2d(3, 16, 3, bias=False).to(dtype=torch.float)
+        self.conv = torch.nn.Conv2d(3, 2, 3, bias=False).to(dtype=torch.float)
 
     def forward(self, x):
         x = self.conv(x)
@@ -24,7 +24,7 @@ class AnnotatedConvModel(torch.nn.Module):
     def __init__(self):
         super(AnnotatedConvModel, self).__init__()
         self.qconfig = default_qconfig
-        self.conv = torch.nn.Conv2d(3, 16, 3, bias=False).to(dtype=torch.float)
+        self.conv = torch.nn.Conv2d(3, 2, 3, bias=False).to(dtype=torch.float)
         self.quant = QuantStub()
         self.dequant = DeQuantStub()
 
@@ -33,6 +33,9 @@ class AnnotatedConvModel(torch.nn.Module):
         x = self.conv(x)
         x = self.dequant(x)
         return x
+
+    def fuse_model(self):
+        pass
 
 
 def quantize_and_run(annotated_model, raw_model, img_data, do_eager=False):
@@ -82,7 +85,7 @@ def test_resnet():
     img_data = [(torch.rand(1, 3, 224, 224, dtype=torch.float),
                  torch.randint(0, 1, (2,), dtype=torch.long))
                 for _ in range(5)]
-    annotated_model = quantization.resnet.resnet18(pretrained=True).eval()
+    annotated_model = qresnet.resnet18(pretrained=True).eval()
     raw_model = models.resnet.resnet18(pretrained=True).eval()
     # does not work yet
     # quantize_and_run(annotated_model, raw_model, img_data)
@@ -127,7 +130,6 @@ def parse_trace(trace, input_shapes):
             param_str = str(key)
             param_name = param_str.split('.')[-1]
             param_names.append(param_name)
-            print(param_names[-1])
 
         # Get names of all inputs
         input_names = [i for i in inputs_r.keys()]
@@ -141,7 +143,7 @@ def parse_trace(trace, input_shapes):
                 node_name = (node_assign[0])[1:]
                 node_getattr_name = ((node_str.split(' = ')[1]).split('"')[1::2])[0]
                 node_arg = (((node_str.split(' = '))[1]).split('(')[1])[1:-2]
-                print("node_name, node_getattr_name, node_arg", node_name, node_getattr_name, node_arg)
+                # print("node_name, node_getattr_name, node_arg", node_name, node_getattr_name, node_arg)
                 if node_arg in input_names:
                     node_weight_map[node_name] = node_getattr_name
                 else:
@@ -149,20 +151,19 @@ def parse_trace(trace, input_shapes):
                     node_weight_map[node_name] = previous_map+"."+node_getattr_name
 
                 if node_getattr_name in param_names:
-
-                    print("Looking up node_name:", node_weight_map[node_name])
+                    # print("Looking up node_name:", node_weight_map[node_name])
                     value = state_dict[node_weight_map[node_name]]
                     tensor = tvm.nd.array(value.cpu().numpy())
                     shape = tensor.shape
                     param_tensors[node_name] = tensor
 
                     params[node_name] = _expr.var(node_name,
-                                                        shape=shape)
+                                                  shape=shape)
 
                     fn_param.append(_expr.var(node_name,
-                                                    shape=shape))
+                                              shape=shape))
 
-        print("printing node_weight_map")
+        print("\nparse trace: parsed following paramters")
         for (k, v) in node_weight_map.items():
             print(k, v)
 
@@ -177,24 +178,58 @@ def test_parse_param():
                 for _ in range(5)]
     trace = torch.jit.trace(conv_layer, img_data[0][0])
     torch._C._jit_pass_inline(trace.graph)
+    print("\nJit graph before quantization")
     print(trace.graph)
 
     input_name = 'input.1'
     shape_dict = {input_name: (1, 3, 224, 224)}
     parse_trace(trace, shape_dict)
 
-    model_quantized = quantize_script(
-        trace,
-        {'': default_qconfig},
-        default_eval_fn,
-        [img_data],
-        inplace=False)
+    def test_quant_eager():
+        annotated_conv_model = AnnotatedConvModel().eval()
+        qutils.quantize_model(annotated_conv_model, "fbgemm")
+        print("\nQuantized conv parameters before jit")
+        for (k, v) in annotated_conv_model.state_dict().items():
+            print(k, v)
 
-    print(model_quantized.graph)
-    parse_trace(model_quantized, shape_dict)
-    # state_dict = model_quantized.state_dict()
-    # for (k, v) in state_dict.items():
-    #     print(k, v.size())
+        qtrace = torch.jit.trace(annotated_conv_model, img_data[0][0])
+        torch._C._jit_pass_inline(qtrace.graph)
+
+        print("\nQuantized jit graph")
+        print(qtrace.graph)
+
+        parse_trace(qtrace, shape_dict)
+
+        print("\nQuantized conv parameters after jit")
+        for (k, v) in qtrace.state_dict().items():
+            if k.endswith("_packed_params"):
+                qweight, _ = torch.ops.quantized.conv2d_unpack(v)
+                scales = qweight.q_per_channel_scales()
+                zero_points = qweight.q_per_channel_zero_points()
+                print("conv weight:", qweight)
+                print("conv scales:", scales)
+                print("conv zero points:", zero_points)
+            else:
+                print(k, v)
+
+    def test_quant_script():
+        model_quantized = quantize_script(
+            trace,
+            {'': default_qconfig},
+            default_eval_fn,
+            [img_data],
+            inplace=False)
+
+        print("\nQuantized jit graph by auto quant")
+        print(model_quantized.graph)
+        parse_trace(model_quantized, shape_dict)
+
+        print("\nQuantized conv parameters after jit")
+        for (k, v) in model_quantized.state_dict().items():
+            print(k, v)
+
+    test_quant_eager()
+    # test_quant_script()
 
 
 # test_conv()
