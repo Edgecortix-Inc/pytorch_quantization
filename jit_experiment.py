@@ -121,7 +121,7 @@ def test_resnet():
     # quantize_and_run(annotated_model, raw_model, img_data)
 
 
-def parse_trace(trace, input_shapes):
+def parse_script_module(script_module, input_shapes):
     inputs_r = {}
     params = {}
     param_tensors = {}
@@ -136,8 +136,8 @@ def parse_trace(trace, input_shapes):
 
     def parse_inputs():
         # Get names and objects of inputs for IR
-        ir_names = [i.debugName() for i in trace.graph.inputs()]
-        ir_inputs = [i for i in trace.graph.inputs()]
+        ir_names = [i.debugName() for i in script_module.graph.inputs()]
+        ir_inputs = [i for i in script_module.graph.inputs()]
 
         # Create corresponding shape and add to input
         for input_name, ir_input in zip(input_shapes, ir_inputs[1:]):
@@ -154,7 +154,7 @@ def parse_trace(trace, input_shapes):
         inputs_r[input_name] = tensor
 
     def parse_params():
-        state_dict = trace.state_dict()
+        state_dict = script_module.state_dict()
         param_names = []
         for key, value in state_dict.items():
             param_str = str(key)
@@ -166,7 +166,7 @@ def parse_trace(trace, input_shapes):
 
         # Iterate through graph for getAttr nodes and match full state_dict name to nodes
         node_weight_map = {}
-        for node in trace.graph.nodes():
+        for node in script_module.graph.nodes():
             if node.kind() == "prim::GetAttr":
                 node_str = str(node)
                 node_assign = (node_str.split(' = ')[0]).split(' : ')
@@ -193,7 +193,7 @@ def parse_trace(trace, input_shapes):
                     fn_param.append(_expr.var(node_name,
                                               shape=shape))
 
-        # print("\nparse trace: parsed following paramters")
+        # print("\nparse script_module: parsed following paramters")
         # for (k, v) in node_weight_map.items():
         #     print(k, v)
 
@@ -210,11 +210,11 @@ def test_parse_param():
 
     def test_quant_eager():
         annotated_conv_model = AnnotatedConvBnModel().eval()
-        trace = torch.jit.trace(annotated_conv_model, img_data[0][0])
-        torch._C._jit_pass_inline(trace.graph)
-        print("\nOriginal ConvBnReLU graph")
-        print(trace.graph)
-        parse_trace(trace, shape_dict)
+        script = torch.jit.script(annotated_conv_model)
+        torch._C._jit_pass_inline(script.graph)
+        print("\nOriginal ConvBnReLU graph by script")
+        print(script.graph)
+        parse_script_module(script, shape_dict)
 
         print("\nOriginal ConvBnReLU parameters")
         for (k, v) in annotated_conv_model.state_dict().items():
@@ -225,13 +225,20 @@ def test_parse_param():
         for (k, v) in annotated_conv_model.state_dict().items():
             print(k, v)
 
+        qscript = torch.jit.script(annotated_conv_model)
+        torch._C._jit_pass_inline(qscript.graph)
         qtrace = torch.jit.trace(annotated_conv_model, img_data[0][0])
         torch._C._jit_pass_inline(qtrace.graph)
+
+        print("\nQuantized jit graph by script")
+        print(qscript.graph)
 
         print("\nQuantized jit graph")
         print(qtrace.graph)
 
-        parse_trace(qtrace, shape_dict)
+        # does not work
+        # parse_script_module(qscript, shape_dict)
+        parse_script_module(qtrace, shape_dict)
 
         print("\nQuantized fused parameters after jit")
         for (k, v) in qtrace.state_dict().items():
@@ -261,7 +268,7 @@ def test_parse_param():
 
         print("\nQuantized jit graph by auto quant")
         print(model_quantized.graph)
-        parse_trace(model_quantized, shape_dict)
+        parse_script_module(model_quantized, shape_dict)
 
         print("\nQuantized conv parameters after jit")
         for (k, v) in model_quantized.state_dict().items():
