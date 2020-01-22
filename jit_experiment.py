@@ -161,9 +161,7 @@ def parse_script_module(script_module, input_shapes):
             param_str = str(key)
             param_name = param_str.split('.')[-1]
             param_names.add(param_name)
-            # print("(key, param_name): (%s, %s)" % (key, param_name))
 
-        # Get names of all inputs
         input_names = [i for i in inputs_r.keys()]
         print("")
         # Iterate through graph for getAttr nodes and match full state_dict name to nodes
@@ -215,6 +213,7 @@ def parse_script_module(script_module, input_shapes):
                 list_shape = []
                 for input_node in node.inputs():
                     if input_node.debugName() in inputs_r.keys():
+                        # TODO
                         assert(False)
                     elif input_node.debugName() in consts.keys():
                         c = consts[input_node.debugName()]
@@ -307,7 +306,6 @@ def parse_script_module(script_module, input_shapes):
 
             call = tvm_conversion.convert_map[operator](op_inputs_r[node_id],
                                                         op_inputs_types[node_id])
-
             outputs.append(call)
             nid_to_node_name[node_id] = nid
             nid = nid+1
@@ -403,28 +401,27 @@ def test_parse_param():
 # test_conv()
 # test_resnet()
 # test_parse_param()
-img_data = [(torch.rand(1, 3, 224, 224, dtype=torch.float),
-             torch.randint(0, 1, (2,), dtype=torch.long))
-            for _ in range(5)]
+
+inp = torch.rand(1, 3, 224, 224, dtype=torch.float)
 input_name = 'X'
 input_shapes = {input_name: (1, 3, 224, 224)}
-annotated_conv_model = AnnotatedConvBnModel().eval()
-# qutils.quantize_model(annotated_conv_model, "fbgemm")
-script_module = torch.jit.trace(annotated_conv_model, img_data[0][0]).eval()
+# raw_model = AnnotatedConvBnModel().eval()
+# qutils.quantize_model(raw_model, "fbgemm")
+raw_model = models.resnet.resnet18(pretrained=True).eval()
+script_module = torch.jit.trace(raw_model, inp).eval()
 torch._C._jit_pass_inline(script_module.graph)
 mod, params = parse_script_module(script_module, input_shapes)
-print(script_module.graph)
-print(mod)
+# print(script_module.graph)
 
 with torch.no_grad():
-    pt_result = script_module(img_data[0][0]).numpy()
+    pt_result = script_module(inp).numpy()
 
 with relay.build_config(opt_level=3):
     json, lib, param = relay.build(mod, target="llvm", params=params)
 
 runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context("cpu", 0))
 runtime.set_input(**param)
-runtime.set_input("X", img_data[0][0].numpy())
+runtime.set_input("X", inp.numpy())
 runtime.run()
 tvm_result = runtime.get_output(0).asnumpy()
 np.allclose(tvm_result, pt_result)
