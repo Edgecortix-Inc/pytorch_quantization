@@ -5,6 +5,7 @@ from torch.quantization import default_qconfig, quantize, default_eval_fn
 from torch.quantization._quantize_script import quantize_script
 from torchvision.models import quantization
 from torchvision import models
+from tvm import relay
 
 
 class ConvModel(torch.nn.Module):
@@ -85,5 +86,34 @@ def test_resnet():
     # quantize_and_run(annotated_model, raw_model, img_data)
 
 
-test_conv()
-test_resnet()
+def test_parse_param():
+    conv_layer = ConvModel().eval()
+    img_data = [(torch.rand(1, 3, 224, 224, dtype=torch.float),
+                 torch.randint(0, 1, (2,), dtype=torch.long))
+                for _ in range(5)]
+    trace = torch.jit.trace(conv_layer, img_data[0][0])
+    torch._C._jit_pass_inline(trace.graph)
+    print(trace.graph)
+
+    input_name = 'input.1'
+    shape_dict = {input_name: (1, 3, 224, 224)}
+    mod, params = relay.frontend.from_pytorch(trace, shape_dict)
+
+    model_quantized = quantize_script(
+        trace,
+        {'': default_qconfig},
+        default_eval_fn,
+        [img_data],
+        inplace=False)
+
+    print(model_quantized.graph)
+    state_dict = model_quantized.state_dict()
+    for (k, v) in state_dict.items():
+        print(k, v.size())
+
+    mod, params = relay.frontend.from_pytorch(model_quantized, shape_dict)
+
+
+# test_conv()
+# test_resnet()
+test_parse_param()
