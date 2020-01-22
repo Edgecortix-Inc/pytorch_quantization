@@ -410,8 +410,21 @@ input_name = 'X'
 input_shapes = {input_name: (1, 3, 224, 224)}
 annotated_conv_model = AnnotatedConvBnModel().eval()
 # qutils.quantize_model(annotated_conv_model, "fbgemm")
-script_module = torch.jit.trace(annotated_conv_model, img_data[0][0])
+script_module = torch.jit.trace(annotated_conv_model, img_data[0][0]).eval()
 torch._C._jit_pass_inline(script_module.graph)
 mod, params = parse_script_module(script_module, input_shapes)
 print(script_module.graph)
 print(mod)
+
+with torch.no_grad():
+    pt_result = script_module(img_data[0][0]).numpy()
+
+with relay.build_config(opt_level=3):
+    json, lib, param = relay.build(mod, target="llvm", params=params)
+
+runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context("cpu", 0))
+runtime.set_input(**param)
+runtime.set_input("X", img_data[0][0].numpy())
+runtime.run()
+tvm_result = runtime.get_output(0).asnumpy()
+np.allclose(tvm_result, pt_result)
