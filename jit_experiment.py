@@ -8,13 +8,14 @@ from torchvision import models
 
 import numpy as np
 import tvm
+from tvm import relay
 from tvm.relay import expr as _expr
 
 
 class ConvModel(torch.nn.Module):
     def __init__(self):
         super(ConvModel, self).__init__()
-        self.conv = torch.nn.Conv2d(3, 2, 3, bias=False).to(dtype=torch.float)
+        self.conv = torch.nn.Conv2d(3, 3, 3, bias=False).to(dtype=torch.float)
 
     def forward(self, x):
         x = self.conv(x)
@@ -25,7 +26,7 @@ class AnnotatedConvModel(torch.nn.Module):
     def __init__(self):
         super(AnnotatedConvModel, self).__init__()
         self.qconfig = default_qconfig
-        self.conv = torch.nn.Conv2d(3, 2, 3, bias=False).to(dtype=torch.float)
+        self.conv = torch.nn.Conv2d(3, 3, 3, bias=False).to(dtype=torch.float)
         self.quant = QuantStub()
         self.dequant = DeQuantStub()
 
@@ -54,7 +55,7 @@ class AnnotatedConvBnModel(torch.nn.Module):
     def __init__(self):
         super(AnnotatedConvBnModel, self).__init__()
         self.qconfig = default_qconfig
-        self.block = ConvBNReLU(3, 2)
+        self.block = ConvBNReLU(3, 3)
         self.quant = QuantStub()
         self.dequant = DeQuantStub()
 
@@ -153,15 +154,16 @@ def parse_script_module(script_module, input_shapes):
 
     def parse_params():
         state_dict = script_module.state_dict()
-        param_names = []
+        param_names = set()
         for key, value in state_dict.items():
             param_str = str(key)
             param_name = param_str.split('.')[-1]
-            param_names.append(param_name)
+            param_names.add(param_name)
+            # print("(key, param_name): (%s, %s)" % (key, param_name))
 
         # Get names of all inputs
         input_names = [i for i in inputs_r.keys()]
-
+        print("")
         # Iterate through graph for getAttr nodes and match full state_dict name to nodes
         node_weight_map = {}
         for node in script_module.graph.nodes():
@@ -174,30 +176,102 @@ def parse_script_module(script_module, input_shapes):
                 print("node_name, node_getattr_name, node_arg", node_name, node_getattr_name, node_arg)
                 if node_arg in input_names:
                     node_weight_map[node_name] = node_getattr_name
+                    print("node_weight_map: %s -> %s " % (node_name, node_getattr_name))
                 else:
                     previous_map = node_weight_map[node_arg[:]]
                     node_weight_map[node_name] = previous_map+"."+node_getattr_name
+                    print("prev map: %s -> %s" % (node_arg, previous_map))
+                    print("new map: %s -> %s" % (node_name, node_weight_map[node_name]))
 
                 if node_getattr_name in param_names:
-                    # print("Looking up node_name:", node_weight_map[node_name])
+                    print("Looking up node_name:", node_weight_map[node_name])
                     value = state_dict[node_weight_map[node_name]]
                     tensor = tvm.nd.array(value.cpu().numpy())
                     shape = tensor.shape
                     param_tensors[node_name] = tensor
-
                     params[node_name] = _expr.var(node_name,
                                                   shape=shape)
-
-                    fn_param.append(_expr.var(node_name,
-                                              shape=shape))
+                    fn_param.append(params[node_name])
 
         print("\nparse script_module: parsed following paramters")
-        for (k, v) in node_weight_map.items():
-            print(k, v)
+        for (k, v) in params.items():
+            print("Node name=%s, param_name=%s, shape=" % (k, node_weight_map[k]),  param_tensors[k].shape)
+
+    def parse_ops():
+        # Traverse nodes and add to graph
+        for node in script_module.graph.nodes():
+            node_name = node.output().debugName()
+            if node.kind() == "prim::Constant" and len(node.attributeNames()) == 1:
+                attribute_names = node.attributeNames()
+                attr_name = attribute_names[0]
+                ty = node.output().type().kind()
+                if ty == "IntType" or ty == "BoolType":
+                    consts[node_name] = node.i(attr_name)
+                elif ty == "FloatType":
+                    consts[node_name] = node.f(attr_name)
+            elif node.kind() == "prim::ListConstruct":
+                list_shape = []
+                for input_node in node.inputs():
+                    if input_node.debugName() in inputs_r.keys():
+                        assert(False)
+                    elif input_node.debugName() in consts.keys():
+                        c = consts[input_node.debugName()]
+                        assert(isinstance(c, int))
+                        list_shape.append(c)
+                inputs_r[node_name] = _expr.var(node_name, shape=list_shape)
+            elif node.kind() == "prim::GetAttr":
+                continue
+
+            add_op(node_name, node)
+
+    # Graph Helper Functions
+    def add_op(node_id, op_node):
+        ops[node_id] = op_node
+        input_list_r = []
+        input_list_types = []
+        for input_node in op_node.inputs():
+            if input_node.debugName() in inputs_r.keys():
+                input_list_r.append(inputs_r[input_node.debugName()])
+            elif input_node.debugName() in params.keys():
+                input_list_r.append(params[input_node.debugName()])
+            elif input_node.node().kind() == "prim::Constant" and len(input_node.node().attributeNames()) == 1:
+                input_list_r.append(consts[input_node.debugName()])
+            else:
+                input_list_r.append("call/var."+input_node.debugName())
+
+                if op_node.kind() == 'prim::ListConstruct':
+                    if node_id in inputs_r.keys():
+                        inputs_r.pop(node_id)
+
+            try:
+                input_node_kind = input_node.type().kind()
+                if input_node_kind == 'TensorType':
+                    if input_node.type().scalarType() is None:
+                        input_list_types.append('float')
+                    else:
+                        input_list_types.append(input_node.type().scalarType().lower())
+                elif input_node_kind == 'ListType':
+                    input_list_types.append(str(input_node.type().getElementType()).lower())
+                elif input_node_kind == 'IntType' or input_node_kind == 'FloatType' or \
+                        input_node_kind == 'BoolType' or input_node_kind == 'StringType' or \
+                        input_node_kind == 'OptionalType':
+                    input_list_types.append(str(input_node.type()).lower())
+                else:
+                    input_list_types.append('UnsupportedType')
+            except Exception as e:
+                print('Internal PyTorch error. Failed to grab type.')
+
+        node_type = op_node.output().type()
+        if op_node.kind() in ['aten::ones', 'aten::zeros']:
+            input_list_types[0] = node_type.scalarType().lower()
+
+        op_inputs_r[node_id] = input_list_r
+        op_inputs_types[node_id] = input_list_types
 
     parse_inputs()
     parse_params()
-
+    parse_ops()
+    print(op_inputs_r)
 
 def test_parse_param():
     img_data = [(torch.rand(1, 3, 224, 224, dtype=torch.float),
@@ -285,9 +359,24 @@ img_data = [(torch.rand(1, 3, 224, 224, dtype=torch.float),
 input_name = 'X'
 input_shapes = {input_name: (1, 3, 224, 224)}
 annotated_conv_model = AnnotatedConvBnModel().eval()
-qutils.quantize_model(annotated_conv_model, "fbgemm")
+# qutils.quantize_model(annotated_conv_model, "fbgemm")
 script_module = torch.jit.trace(annotated_conv_model, img_data[0][0])
 torch._C._jit_pass_inline(script_module.graph)
 parse_script_module(script_module, input_shapes)
-nodes = list(script_module.graph.nodes())
 print(script_module.graph)
+nodes = list(script_module.graph.nodes())
+
+# for (k, v) in annotated_conv_model.state_dict().items():
+#     print(k, v.size())
+# constant_nodes = [node for node in nodes if node.kind() == "prim::Constant"]
+# for c in constant_nodes:
+#     attribute_names = c.attributeNames()
+#     if len(attribute_names) == 0: continue
+#     attr_name = attribute_names[0]
+#     ty = c.output().type().kind()
+#     if ty == "IntType":
+#         print(c, c.i(attr_name))
+#     elif ty == "FloatType":
+#         print(c, c.f(attr_name))
+#     elif ty == "BoolType":
+#         print(c, c.i(attr_name))
