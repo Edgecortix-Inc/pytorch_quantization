@@ -123,9 +123,9 @@ def test_resnet():
 
 def parse_script_module(script_module, input_shapes):
     inputs_r = {}
+    fn_param = []
     params = {}
     param_tensors = {}
-    fn_param = []
     consts = {}
     ops = {}
     op_inputs_r = {}
@@ -135,22 +135,20 @@ def parse_script_module(script_module, input_shapes):
     nid_to_node_name = {}
 
     def parse_inputs():
-        # Get names and objects of inputs for IR
-        ir_names = [i.debugName() for i in script_module.graph.inputs()]
         ir_inputs = [i for i in script_module.graph.inputs()]
+        ir_names = [i.debugName() for i in ir_inputs]
 
-        # Create corresponding shape and add to input
         for input_name, ir_input in zip(input_shapes, ir_inputs[1:]):
             input_shape = input_shapes[input_name]
             ir_input.setDebugName(input_name)
-            inputs_r[input_name] = _expr.var(input_name,
-                                             shape=input_shapes[input_name])
-            fn_param.append(_expr.var(input_name,
-                                      shape=input_shapes[input_name]))
+            input_var = _expr.var(input_name,
+                                  shape=input_shapes[input_name])
+            inputs_r[input_name] = input_var # X: (1, 3, 224, 224)
+            fn_param.append(input_var)
         # Add self (first input of a PyTorch graph) to inputs
         input_shape = [3]
         tensor = tvm.nd.array(np.zeros(input_shape).astype(np.float32))
-        input_name = ir_names[0]
+        input_name = ir_names[0] # self.1
         inputs_r[input_name] = tensor
 
     def parse_params():
@@ -168,12 +166,12 @@ def parse_script_module(script_module, input_shapes):
         node_weight_map = {}
         for node in script_module.graph.nodes():
             if node.kind() == "prim::GetAttr":
-                node_str = str(node)
-                node_assign = (node_str.split(' = ')[0]).split(' : ')
-                node_name = (node_assign[0])[1:]
-                node_getattr_name = ((node_str.split(' = ')[1]).split('"')[1::2])[0]
-                node_arg = (((node_str.split(' = '))[1]).split('(')[1])[1:-2]
-                # print("node_name, node_getattr_name, node_arg", node_name, node_getattr_name, node_arg)
+                attribute_names = node.attributeNames()
+                assert(len(attribute_names) == 1)
+                node_getattr_name = node.s(attribute_names[0])
+                node_arg = node.input().debugName()
+                node_name = node.output().debugName()
+                print("node_name, node_getattr_name, node_arg", node_name, node_getattr_name, node_arg)
                 if node_arg in input_names:
                     node_weight_map[node_name] = node_getattr_name
                 else:
@@ -193,9 +191,9 @@ def parse_script_module(script_module, input_shapes):
                     fn_param.append(_expr.var(node_name,
                                               shape=shape))
 
-        # print("\nparse script_module: parsed following paramters")
-        # for (k, v) in node_weight_map.items():
-        #     print(k, v)
+        print("\nparse script_module: parsed following paramters")
+        for (k, v) in node_weight_map.items():
+            print(k, v)
 
     parse_inputs()
     parse_params()
@@ -205,52 +203,52 @@ def test_parse_param():
     img_data = [(torch.rand(1, 3, 224, 224, dtype=torch.float),
                  torch.randint(0, 1, (2,), dtype=torch.long))
                 for _ in range(5)]
-    input_name = 'input.1'
+    input_name = 'X'
     shape_dict = {input_name: (1, 3, 224, 224)}
 
     def test_quant_eager():
         annotated_conv_model = AnnotatedConvBnModel().eval()
         script = torch.jit.script(annotated_conv_model)
         torch._C._jit_pass_inline(script.graph)
-        print("\nOriginal ConvBnReLU graph by script")
-        print(script.graph)
-        parse_script_module(script, shape_dict)
+        # print("\nOriginal ConvBnReLU graph by script")
+        # print(script.graph)
+        # parse_script_module(script, shape_dict)
 
-        print("\nOriginal ConvBnReLU parameters")
-        for (k, v) in annotated_conv_model.state_dict().items():
-            print(k, v)
+        # print("\nOriginal ConvBnReLU parameters")
+        # for (k, v) in annotated_conv_model.state_dict().items():
+        #     print(k, v)
 
         qutils.quantize_model(annotated_conv_model, "fbgemm")
-        print("\nQuantized fused parameters before jit")
-        for (k, v) in annotated_conv_model.state_dict().items():
-            print(k, v)
+        # print("\nQuantized fused parameters before jit")
+        # for (k, v) in annotated_conv_model.state_dict().items():
+        #     print(k, v)
 
         qscript = torch.jit.script(annotated_conv_model)
         torch._C._jit_pass_inline(qscript.graph)
         qtrace = torch.jit.trace(annotated_conv_model, img_data[0][0])
         torch._C._jit_pass_inline(qtrace.graph)
 
-        print("\nQuantized jit graph by script")
-        print(qscript.graph)
+        # print("\nQuantized jit graph by script")
+        # print(qscript.graph)
 
-        print("\nQuantized jit graph")
-        print(qtrace.graph)
+        # print("\nQuantized jit graph")
+        # print(qtrace.graph)
 
         # does not work
         # parse_script_module(qscript, shape_dict)
         parse_script_module(qtrace, shape_dict)
 
-        print("\nQuantized fused parameters after jit")
-        for (k, v) in qtrace.state_dict().items():
-            if k.endswith("_packed_params"):
-                qweight, _ = torch.ops.quantized.conv2d_unpack(v)
-                scales = qweight.q_per_channel_scales()
-                zero_points = qweight.q_per_channel_zero_points()
-                print("%s weight:" % k, qweight)
-                print("%s scales:" % k, scales)
-                print("%s zero points:" % k, zero_points)
-            else:
-                print(k, v)
+        # print("\nQuantized fused parameters after jit")
+        # for (k, v) in qtrace.state_dict().items():
+        #     if k.endswith("_packed_params"):
+        #         qweight, _ = torch.ops.quantized.conv2d_unpack(v)
+        #         scales = qweight.q_per_channel_scales()
+        #         zero_points = qweight.q_per_channel_zero_points()
+        #         print("%s weight:" % k, qweight)
+        #         print("%s scales:" % k, scales)
+        #         print("%s zero points:" % k, zero_points)
+        #     else:
+        #         print(k, v)
 
     def test_quant_script():
         conv_layer = ConvModel().eval()
@@ -280,4 +278,16 @@ def test_parse_param():
 
 # test_conv()
 # test_resnet()
-test_parse_param()
+# test_parse_param()
+img_data = [(torch.rand(1, 3, 224, 224, dtype=torch.float),
+             torch.randint(0, 1, (2,), dtype=torch.long))
+            for _ in range(5)]
+input_name = 'X'
+input_shapes = {input_name: (1, 3, 224, 224)}
+annotated_conv_model = AnnotatedConvBnModel().eval()
+qutils.quantize_model(annotated_conv_model, "fbgemm")
+script_module = torch.jit.trace(annotated_conv_model, img_data[0][0])
+torch._C._jit_pass_inline(script_module.graph)
+parse_script_module(script_module, input_shapes)
+nodes = list(script_module.graph.nodes())
+print(script_module.graph)
