@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.quantization import QuantStub, DeQuantStub
+from torch.quantization import QuantStub, DeQuantStub, QuantWrapper
 from torch.quantization import default_qconfig, quantize, default_eval_fn
 from torch.quantization._quantize_script import quantize_script
 from torchvision.models.quantization import resnet as qresnet, utils as qutils
@@ -70,6 +70,43 @@ class AnnotatedConvBnModel(torch.nn.Module):
     def fuse_model(self):
         torch.quantization.fuse_modules(self.block, ['0', '1', '2'], inplace=True)
 
+
+class SingleLayerLinearModel(torch.nn.Module):
+    def __init__(self):
+        super(SingleLayerLinearModel, self).__init__()
+        self.fc1 = torch.nn.Linear(5, 5).to(dtype=torch.float)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        return x
+
+
+class AnnotatedSingleLayerLinearModel(torch.nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super(AnnotatedSingleLayerLinearModel, self).__init__()
+        self.qconfig = default_qconfig
+        self.fc1 = QuantWrapper(torch.nn.Linear(in_dim, out_dim).to(dtype=torch.float))
+
+    def forward(self, x):
+        x = self.fc1(x)
+        return x
+
+class TwoLayerLinearModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.qconfig = default_qconfig
+        self.block = nn.Sequential(
+            nn.Flatten(),
+            AnnotatedSingleLayerLinearModel(25, 25),
+            AnnotatedSingleLayerLinearModel(25, 25)
+            )
+
+    def forward(self, x):
+        x = self.block(x)
+        return x
+
+    def fuse_model(self):
+        pass
 
 def quantize_and_run(annotated_model, raw_model, img_data, do_eager=False):
     qconfig_dict = {'': default_qconfig}
@@ -162,27 +199,39 @@ def parse_script_module(script_module, input_shapes):
         input_name = ir_names[0] # self.1
         inputs_r[input_name] = tensor
 
+    def unpack_quant_params(param_name, packed_params):
+        if "fc" in param_name:
+            qweight, bias = torch.ops.quantized.linear_unpack(packed_params)
+        else:
+            qweight, bias = torch.ops.quantized.conv2d_unpack(packed_params)
+
+        weight = qweight.dequantize().numpy()
+
+        if qweight.qscheme() == torch.per_tensor_affine:
+            scale = qweight.q_scale()
+            zero_point = qweight.q_zero_point()
+            param = QuantParam(weight, np.array([scale]), np.array([zero_point]))
+        else:
+            scales = qweight.q_per_channel_scales()
+            zero_points = qweight.q_per_channel_zero_points()
+            param = QuantParam(weight, scales, zero_points)
+
+        return param
+
     def parse_params():
         state_dict = script_module.state_dict()
         param_names = set()
         for key, value in state_dict.items():
-            param_str = str(key)
-            param_name = param_str.split('.')[-1]
-            param_names.add(param_name)
             if key.endswith("_packed_params"):
-                qweight, qbias = torch.ops.quantized.conv2d_unpack(value)
-                tensor = qweight.dequantize().numpy()
+                print(key)
                 block_name = key[:-len("._packed_params")]
-                if str(qweight.qscheme()) == "torch.per_tensor_affine":
-                    scale = qweight.q_scale()
-                    zero_point = qweight.q_zero_point()
-                    param = QuantParam(tensor, np.array([scale]), np.array([zero_point]))
-                    quant_params[block_name] = param
-                else:
-                    scales = qweight.q_per_channel_scales()
-                    zero_points = qweight.q_per_channel_zero_points()
-                    param = QuantParam(tensor, scales, zero_points)
-                    quant_params[block_name] = param
+                quant_params[block_name] = unpack_quant_params(key, value)
+            elif key.startswith("quant"):
+                print(key, value)
+            else:
+                param_str = str(key)
+                param_name = param_str.split('.')[-1]
+                param_names.add(param_name)
 
         input_names = [i for i in inputs_r.keys()]
         print("")
@@ -292,7 +341,7 @@ def parse_script_module(script_module, input_shapes):
     parse_params()
     print("\n Quantization params:")
     for (k, v) in quant_params.items():
-        print("block = %s, scales =" % k, v.scales, ", zero_points =", v.zero_points)
+        print("block = %s, scales.shape =" % k, v.scales.shape, ", zero_points.shape =", v.zero_points.shape)
     return None, None
     parse_ops()
 
@@ -347,13 +396,13 @@ def parse_script_module(script_module, input_shapes):
     return  _module.Module.from_expr(func), param
 
 
-def quantize_model(model):
+def quantize_model(model, inp):
     # qutils.quantize_model(model, "fbgemm")
     model.fuse_model()
     # model.qconfig = torch.quantization.default_qconfig
     model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
     torch.quantization.prepare(model, inplace=True)
-    model(torch.rand(1, 3, 224, 224, dtype=torch.float))
+    model(inp)
     torch.quantization.convert(model, inplace=True)
 
 
@@ -446,36 +495,22 @@ def test_parse_param():
 # test_resnet()
 # test_parse_param()
 
-inp = torch.rand(1, 3, 224, 224, dtype=torch.float)
 input_name = 'X'
+inp = torch.rand(1, 3, 224, 224, dtype=torch.float)
 input_shapes = {input_name: (1, 3, 224, 224)}
 raw_model = AnnotatedConvBnModel().eval()
-quantize_model(raw_model)
-# raw_model = models.resnet.resnet18(pretrained=True).eval()
+# inp = torch.rand(1, 1, 5, 5, dtype=torch.float)
+# input_shapes = {input_name: (1, 1, 5, 5)}
+# raw_model = TwoLayerLinearModel()
+quantize_model(raw_model, inp)
+
+# raw_model = qresnet.resnet18(pretrained=True, quantize=True).eval()
 
 script_module = torch.jit.trace(raw_model, inp).eval()
 torch._C._jit_pass_inline(script_module.graph)
-print(script_module.graph)
 
 mod, params = parse_script_module(script_module, input_shapes)
-
-# for (k, v) in script_module.state_dict().items():
-#     if k.endswith("_packed_params"):
-#         qweight, _ = torch.ops.quantized.conv2d_unpack(v)
-#         if str(qweight.qscheme()) == "torch.per_tensor_affine":
-#             scale = qweight.q_scale()
-#             zero_point = qweight.q_zero_point()
-#             print("%s weight:" % k, qweight.dequantize())
-#             print("%s scales:" % k, scale)
-#             print("%s zero points:" % k, zero_point)
-#         else:
-#             scales = qweight.q_per_channel_scales()
-#             zero_points = qweight.q_per_channel_zero_points()
-#             print("%s weight:" % k, qweight.dequantize())
-#             print("%s scales:" % k, scales)
-#             print("%s zero points:" % k, zero_points)
-#     else:
-#         print(k, v)
+print(script_module.graph)
 
 # with torch.no_grad():
 #     pt_result = script_module(inp).numpy()
