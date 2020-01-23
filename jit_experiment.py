@@ -162,25 +162,34 @@ def test_resnet():
 
 
 class QuantParam:
-    def __init__(self, tensor, scales, zero_points):
-        self.tensor = tensor
+    def __init__(self, weight, scales, zero_points):
+        self.weight = weight
         self.scales = scales
         self.zero_points = zero_points
 
 
+class QuantVar:
+    def __init__(self, qparam, block_name):
+        self.weight_var = _expr.var(block_name + "_weight",
+                                    shape=qparam.weight.shape)
+        self.scales_var = _expr.var(block_name + "_scales",
+                                    shape=qparam.scales.shape)
+        self.zero_points_var = _expr.var(block_name + "_zero_points",
+                                         shape=qparam.zero_points.shape)
+
+
 def parse_script_module(script_module, input_shapes):
     inputs_r = {}
-    fn_param = []
     params = {}
     param_tensors = {}
     consts = {}
     ops = {}
     op_inputs_r = {}
     op_inputs_types = {}
-    op_inputs_otypes = {}
-    relay_map = {}
     nid_to_node_name = {}
     quant_params = {}
+    quant_param_vars = {}
+    packed_param_nodes = {}
 
     def parse_inputs():
         ir_inputs = [i for i in script_module.graph.inputs()]
@@ -192,7 +201,6 @@ def parse_script_module(script_module, input_shapes):
             input_var = _expr.var(input_name,
                                   shape=input_shapes[input_name])
             inputs_r[input_name] = input_var # X: (1, 3, 224, 224)
-            fn_param.append(input_var)
         # Add self (first input of a PyTorch graph) to inputs
         input_shape = [3]
         tensor = tvm.nd.array(np.zeros(input_shape).astype(np.float32))
@@ -212,8 +220,8 @@ def parse_script_module(script_module, input_shapes):
             zero_point = qweight.q_zero_point()
             param = QuantParam(weight, np.array([scale]), np.array([zero_point]))
         else:
-            scales = qweight.q_per_channel_scales()
-            zero_points = qweight.q_per_channel_zero_points()
+            scales = qweight.q_per_channel_scales().numpy()
+            zero_points = qweight.q_per_channel_zero_points().numpy()
             param = QuantParam(weight, scales, zero_points)
 
         return param
@@ -221,7 +229,7 @@ def parse_script_module(script_module, input_shapes):
     def get_input_quant_param(state_dict):
         input_scale = state_dict["quant.scale"]
         input_zero_point = state_dict["quant.zero_point"]
-        return input_scale, input_zero_point
+        return float(input_scale[0]), float(input_zero_point[0])
 
     def parse_params():
         state_dict = script_module.state_dict()
@@ -229,7 +237,8 @@ def parse_script_module(script_module, input_shapes):
         for key, value in state_dict.items():
             if key.endswith("_packed_params"):
                 block_name = key[:-len("._packed_params")]
-                quant_params[block_name] = unpack_quant_params(key, value)
+                quant_params[key] = unpack_quant_params(key, value)
+                quant_param_vars[key] = QuantVar(quant_params[key], block_name)
 
             param_str = str(key)
             param_name = param_str.split('.')[-1]
@@ -256,12 +265,15 @@ def parse_script_module(script_module, input_shapes):
                     if key == "fc._packed_params":
                         key += "._packed_params"
                     value = state_dict[key]
-                    tensor = tvm.nd.array(value.cpu().numpy())
-                    shape = tensor.shape
-                    param_tensors[node_name] = tensor
-                    params[node_name] = _expr.var(node_name,
-                                                  shape=shape)
-                    fn_param.append(params[node_name])
+
+                    if node_getattr_name == "_packed_params":
+                        packed_param_nodes[node_name] = key
+                    else:
+                        tensor = tvm.nd.array(value.cpu().numpy())
+                        shape = tensor.shape
+                        param_tensors[node_name] = tensor
+                        params[node_name] = _expr.var(node_name,
+                                                      shape=shape)
 
         print("\nparse script_module: parsed following paramters")
         for (k, v) in params.items():
@@ -300,14 +312,21 @@ def parse_script_module(script_module, input_shapes):
         input_list_r = []
         input_list_types = []
         for input_node in op_node.inputs():
-            if input_node.debugName() in inputs_r.keys():
-                input_list_r.append(inputs_r[input_node.debugName()])
-            elif input_node.debugName() in params.keys():
-                input_list_r.append(params[input_node.debugName()])
-            elif input_node.node().kind() == "prim::Constant" and len(input_node.node().attributeNames()) == 1:
-                input_list_r.append(consts[input_node.debugName()])
+            inode = input_node.debugName()
+            if inode in inputs_r.keys():
+                input_list_r.append(inputs_r[inode])
+            elif inode in params.keys():
+                input_list_r.append(params[inode])
+            elif input_node.node().kind() == "prim::Constant" and \
+                 len(input_node.node().attributeNames()) == 1:
+                input_list_r.append(consts[inode])
+            elif inode in packed_param_nodes.keys():
+                key = packed_param_nodes[inode]
+                input_list_r.append(quant_param_vars[key].weight_var)
+                input_list_r.append(quant_param_vars[key].scales_var)
+                input_list_r.append(quant_param_vars[key].zero_points_var)
             else:
-                input_list_r.append("call/var."+input_node.debugName())
+                input_list_r.append("call/var."+inode)
                 if op_node.kind() == 'prim::ListConstruct':
                     if node_id in inputs_r.keys():
                         inputs_r.pop(node_id)
@@ -329,11 +348,12 @@ def parse_script_module(script_module, input_shapes):
             except Exception as e:
                 print('Internal PyTorch error. Failed to grab type.')
 
-        print("add_op: %s has %d inputs." % (op_node.kind(), len(input_list_r)))
         node_type = op_node.output().type()
         if op_node.kind() in ['aten::ones', 'aten::zeros']:
             input_list_types[0] = node_type.scalarType().lower()
 
+        if len(input_list_r) > 0:
+            print("input to the node %s =" % node_id, input_list_r)
         op_inputs_r[node_id] = input_list_r
         op_inputs_types[node_id] = input_list_types
 
@@ -344,7 +364,10 @@ def parse_script_module(script_module, input_shapes):
     for (k, v) in quant_params.items():
         print("block = %s, scales.shape =" % k, v.scales.shape, ", zero_points.shape =", v.zero_points.shape)
     print("input_scale:", input_scale)
-    print("input_zero_point\n", input_zero_point)
+    print("input_zero_point:", input_zero_point)
+    print("packed param nodes:")
+    for n in packed_param_nodes:
+        print(n)
     parse_ops()
     return None, None
 
@@ -363,6 +386,7 @@ def parse_script_module(script_module, input_shapes):
                     elif i.node().kind() == 'prim::Constant':
                         listconstr.append(int(consts[i.debugName()]))
                     elif i.debugName() in inputs_r.keys():
+                        assert(False)
                         listconstr.append(int(inputs_r[i.debugName()]))
 
                 # Unwrap for tensors
@@ -371,20 +395,21 @@ def parse_script_module(script_module, input_shapes):
 
                 outputs.append(listconstr)
                 nid_to_node_name[node_id] = nid
-                nid = nid+1
+                nid = nid + 1
         elif op_node.kind() != "prim::Constant":
             for i in op_node.inputs():
-                if i.debugName() in nid_to_node_name.keys():
+                inode = i.debugName()
+                if inode in nid_to_node_name.keys():
                     for cnt in range(0, len(op_inputs_r[node_id])):
                         if isinstance(op_inputs_r[node_id][cnt], str):
                             if "call/var" in op_inputs_r[node_id][cnt]:
                                 op_inputs_r[node_id][cnt] = \
-                                    outputs[nid_to_node_name[i.debugName()]]
+                                    outputs[nid_to_node_name[inode]]
                                 break
-
-            call = tvm_conversion.convert_map[operator](op_inputs_r[node_id],
-                                                        op_inputs_types[node_id])
-            outputs.append(call)
+            print("inputs to %s" % operator, op_inputs_r[node_id])
+            # call = tvm_conversion.convert_map[operator](op_inputs_r[node_id],
+            #                                             op_inputs_types[node_id])
+            # outputs.append(call)
             nid_to_node_name[node_id] = nid
             nid = nid+1
 
@@ -395,7 +420,14 @@ def parse_script_module(script_module, input_shapes):
 
     func = tvm.relay.Function(_analysis.free_vars(body), body)
     param = {k: tvm.nd.array(v) for k, v in param_tensors.items()}
+    for (k, v) in quant_params.items():
+        assert k in quant_param_vars
+        quant_param_var = quant_param_vars[k]
+        param[quant_param_var.weight_var.name_hint] = tvm.nd.array(v.weight)
+        param[quant_param_var.scales_var.name_hint] = tvm.nd.array(v.scales)
+        param[quant_param_var.zero_points_var.name_hint] = tvm.nd.array(v.zero_points)
 
+    return None, None
     return  _module.Module.from_expr(func), param
 
 
@@ -505,15 +537,20 @@ raw_model = AnnotatedConvBnModel().eval()
 # inp = torch.rand(1, 1, 5, 5, dtype=torch.float)
 # input_shapes = {input_name: (1, 1, 5, 5)}
 # raw_model = TwoLayerLinearModel()
-# quantize_model(raw_model, inp)
+quantize_model(raw_model, inp)
 
-raw_model = qresnet.resnet18(pretrained=True, quantize=True).eval()
+# raw_model = qresnet.resnet18(pretrained=True, quantize=True).eval()
 
 script_module = torch.jit.trace(raw_model, inp).eval()
 torch._C._jit_pass_inline(script_module.graph)
 
 mod, params = parse_script_module(script_module, input_shapes)
 print(script_module.graph)
+
+nodes = list(script_module.graph.nodes())
+conv_relu = nodes[23]
+# for (i, n) in enumerate(nodes):
+#     print(i, n)
 
 # with torch.no_grad():
 #     pt_result = script_module(inp).numpy()
