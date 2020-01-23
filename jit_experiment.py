@@ -320,10 +320,13 @@ def parse_script_module(script_module, input_shapes):
                 input_list_r.append(params[inode])
             elif input_node.node().kind() == "prim::Constant" and \
                  len(input_node.node().attributeNames()) == 1:
-                input_list_r.append(consts[inode])
+                input_list_r.append(relay.const(consts[inode]))
             elif inode in packed_param_nodes.keys():
                 key = packed_param_nodes[inode]
-                input_list_r.append(quant_param_vars[key].weight_var)
+                input_list_r.append(relay.qnn.op.quantize(quant_param_vars[key].weight_var,
+                                                          quant_param_vars[key].scales_var,
+                                                          quant_param_vars[key].zero_points_var,
+                                                          out_dtype="uint8"))
                 input_list_r.append(quant_param_vars[key].scales_var)
                 input_list_r.append(quant_param_vars[key].zero_points_var)
             else:

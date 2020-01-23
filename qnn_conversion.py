@@ -1,6 +1,11 @@
+import tvm
+import numpy as np
+from tvm import relay
+
+
 def _quantize_per_tensor():
     def _impl(inputs, input_type):
-        return inputs[0]
+        return relay.qnn.op.quantize(inputs[0], inputs[1], inputs[2], out_dtype="uint8")
     return _impl
 
 
