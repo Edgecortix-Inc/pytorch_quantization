@@ -13,6 +13,7 @@ from tvm.relay import expr as _expr
 from tvm.relay import analysis as _analysis
 from tvm.relay import module as _module
 import tvm_conversion
+import qnn_conversion
 
 class ConvModel(torch.nn.Module):
     def __init__(self):
@@ -369,8 +370,9 @@ def parse_script_module(script_module, input_shapes):
     for n in packed_param_nodes:
         print(n)
     parse_ops()
-    return None, None
 
+    convert_map = {**tvm_conversion.convert_map,
+                   **qnn_conversion.convert_map}
     nid = 0
     outputs = []
     for node_id, op_node in ops.items():
@@ -403,13 +405,17 @@ def parse_script_module(script_module, input_shapes):
                     for cnt in range(0, len(op_inputs_r[node_id])):
                         if isinstance(op_inputs_r[node_id][cnt], str):
                             if "call/var" in op_inputs_r[node_id][cnt]:
+                                print("len(op_inputs_r[node_id]) =", len(op_inputs_r[node_id]))
+                                print("cnt =", cnt)
+                                print("inode %s, nid_to_node_name[inode] =" % inode, nid_to_node_name[inode])
+                                print("len(outputs) =", len(outputs))
                                 op_inputs_r[node_id][cnt] = \
                                     outputs[nid_to_node_name[inode]]
                                 break
             print("inputs to %s" % operator, op_inputs_r[node_id])
-            # call = tvm_conversion.convert_map[operator](op_inputs_r[node_id],
-            #                                             op_inputs_types[node_id])
-            # outputs.append(call)
+            call = convert_map[operator](op_inputs_r[node_id],
+                                         op_inputs_types[node_id])
+            outputs.append(call)
             nid_to_node_name[node_id] = nid
             nid = nid+1
 
