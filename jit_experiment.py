@@ -179,6 +179,12 @@ class QuantVar:
                                      shape=qparam.zero_points.shape)
 
 
+def get_input_quant_param(state_dict):
+    input_scale = state_dict["quant.scale"]
+    input_zero_point = state_dict["quant.zero_point"]
+    return float(input_scale[0]), float(input_zero_point[0])
+
+
 def parse_script_module(script_module, input_shapes):
     inputs_r = {}
     params = {}
@@ -191,6 +197,7 @@ def parse_script_module(script_module, input_shapes):
     quant_params = {}
     quant_param_vars = {}
     packed_param_nodes = {}
+    input_scale, input_zero_point = get_input_quant_param(script_module.state_dict())
 
     def parse_inputs():
         ir_inputs = [i for i in script_module.graph.inputs()]
@@ -227,10 +234,6 @@ def parse_script_module(script_module, input_shapes):
 
         return param
 
-    def get_input_quant_param(state_dict):
-        input_scale = state_dict["quant.scale"]
-        input_zero_point = state_dict["quant.zero_point"]
-        return float(input_scale[0]), float(input_zero_point[0])
 
     def parse_params():
         state_dict = script_module.state_dict()
@@ -312,17 +315,17 @@ def parse_script_module(script_module, input_shapes):
         ops[node_id] = op_node
         input_list_r = []
         input_list_types = []
-        for input_node in op_node.inputs():
-            inode = input_node.debugName()
-            if inode in inputs_r.keys():
-                input_list_r.append(inputs_r[inode])
-            elif inode in params.keys():
-                input_list_r.append(params[inode])
-            elif input_node.node().kind() == "prim::Constant" and \
-                 len(input_node.node().attributeNames()) == 1:
-                input_list_r.append(relay.const(consts[inode]))
-            elif inode in packed_param_nodes.keys():
-                key = packed_param_nodes[inode]
+        for input_value in op_node.inputs():
+            inode_id = input_value.debugName()
+            inode = input_value.node()
+            if inode_id in inputs_r.keys():
+                input_list_r.append(inputs_r[inode_id])
+            elif inode_id in params.keys():
+                input_list_r.append(params[inode_id])
+            elif inode.kind() == "prim::Constant" and len(inode.attributeNames()) == 1:
+                input_list_r.append(relay.const(consts[inode_id]))
+            elif inode_id in packed_param_nodes.keys():
+                key = packed_param_nodes[inode_id]
                 qparam = quant_param_vars[key]
                 input_list_r.append(relay.qnn.op.quantize(qparam.weight,
                                                           qparam.scales,
@@ -331,23 +334,23 @@ def parse_script_module(script_module, input_shapes):
                 input_list_r.append(quant_param_vars[key].scales)
                 input_list_r.append(quant_param_vars[key].zero_points)
             else:
-                input_list_r.append("call/var."+inode)
+                input_list_r.append("call/var." + inode_id)
                 if op_node.kind() == 'prim::ListConstruct':
                     if node_id in inputs_r.keys():
                         inputs_r.pop(node_id)
             try:
-                input_node_kind = input_node.type().kind()
-                if input_node_kind == 'TensorType':
-                    if input_node.type().scalarType() is None:
+                input_value_kind = input_value.type().kind()
+                if input_value_kind == 'TensorType':
+                    if input_value.type().scalarType() is None:
                         input_list_types.append('float')
                     else:
-                        input_list_types.append(input_node.type().scalarType().lower())
-                elif input_node_kind == 'ListType':
-                    input_list_types.append(str(input_node.type().getElementType()).lower())
-                elif input_node_kind == 'IntType' or input_node_kind == 'FloatType' or \
-                        input_node_kind == 'BoolType' or input_node_kind == 'StringType' or \
-                        input_node_kind == 'OptionalType':
-                    input_list_types.append(str(input_node.type()).lower())
+                        input_list_types.append(input_value.type().scalarType().lower())
+                elif input_value_kind == 'ListType':
+                    input_list_types.append(str(input_value.type().getElementType()).lower())
+                elif input_value_kind == 'IntType' or input_value_kind == 'FloatType' or \
+                        input_value_kind == 'BoolType' or input_value_kind == 'StringType' or \
+                        input_value_kind == 'OptionalType':
+                    input_list_types.append(str(input_value.type()).lower())
                 else:
                     input_list_types.append('UnsupportedType')
             except Exception as e:
@@ -357,6 +360,10 @@ def parse_script_module(script_module, input_shapes):
         if op_node.kind() in ['aten::ones', 'aten::zeros']:
             input_list_types[0] = node_type.scalarType().lower()
 
+        if op_node.kind() == "aten::dequantize":
+            input_list_r.append(relay.const(input_scale))
+            input_list_r.append(relay.const(input_zero_point))
+
         if len(input_list_r) > 0:
             print("input to the node %s =" % node_id, input_list_r)
         op_inputs_r[node_id] = input_list_r
@@ -364,10 +371,10 @@ def parse_script_module(script_module, input_shapes):
 
     parse_inputs()
     parse_params()
-    input_scale, input_zero_point = get_input_quant_param(script_module.state_dict())
+
     print("\n Quantization params:")
     for (k, v) in quant_params.items():
-        print("block = %s, scales.shape =" % k, v.scales.shape, ", zero_points.shape =", v.zero_points.shape)
+        print("block = %s, scales =" % k, v.scales, ", zero_points =", v.zero_points)
     print("input_scale:", input_scale)
     print("input_zero_point:", input_zero_point)
     print("packed param nodes:")
@@ -444,8 +451,8 @@ def parse_script_module(script_module, input_shapes):
 def quantize_model(model, inp):
     # qutils.quantize_model(model, "fbgemm")
     model.fuse_model()
-    # model.qconfig = torch.quantization.default_qconfig
-    model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
+    model.qconfig = torch.quantization.default_qconfig
+    # model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
     torch.quantization.prepare(model, inplace=True)
     model(inp)
     torch.quantization.convert(model, inplace=True)
