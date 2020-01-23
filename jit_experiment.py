@@ -268,6 +268,7 @@ def parse_script_module(script_module, input_shapes):
 
     parse_inputs()
     parse_params()
+    return None, None
     parse_ops()
 
     nid = 0
@@ -321,6 +322,15 @@ def parse_script_module(script_module, input_shapes):
     return  _module.Module.from_expr(func), param
 
 
+def quantize_model(model):
+    # qutils.quantize_model(model, "fbgemm")
+    model.fuse_model()
+    model.qconfig = torch.quantization.default_qconfig
+    torch.quantization.prepare(model, inplace=True)
+    model(torch.rand(1, 3, 224, 224, dtype=torch.float))
+    torch.quantization.convert(model, inplace=True)
+
+
 def test_parse_param():
     img_data = [(torch.rand(1, 3, 224, 224, dtype=torch.float),
                  torch.randint(0, 1, (2,), dtype=torch.long))
@@ -340,7 +350,7 @@ def test_parse_param():
         # for (k, v) in annotated_conv_model.state_dict().items():
         #     print(k, v)
 
-        qutils.quantize_model(annotated_conv_model, "fbgemm")
+        quantize_model(annotated_conv_model, "fbgemm")
         # print("\nQuantized fused parameters before jit")
         # for (k, v) in annotated_conv_model.state_dict().items():
         #     print(k, v)
@@ -360,17 +370,25 @@ def test_parse_param():
         # parse_script_module(qscript, shape_dict)
         parse_script_module(qtrace, shape_dict)
 
-        # print("\nQuantized fused parameters after jit")
-        # for (k, v) in qtrace.state_dict().items():
-        #     if k.endswith("_packed_params"):
-        #         qweight, _ = torch.ops.quantized.conv2d_unpack(v)
-        #         scales = qweight.q_per_channel_scales()
-        #         zero_points = qweight.q_per_channel_zero_points()
-        #         print("%s weight:" % k, qweight)
-        #         print("%s scales:" % k, scales)
-        #         print("%s zero points:" % k, zero_points)
-        #     else:
-        #         print(k, v)
+        print("\nQuantized fused parameters after jit")
+        for (k, v) in qtrace.state_dict().items():
+            if k.endswith("_packed_params"):
+                qweight, _ = torch.ops.quantized.conv2d_unpack(v)
+                if str(qweight.qscheme() == "torch.per_tensor_affine"):
+                    scales = qweight.q_scale()
+                    zero_points = qweight.q_zero_point()
+                    print("%s weight:" % k, qweight)
+                    print("%s scales:" % k, scales)
+                    print("%s zero points:" % k, zero_points)
+                else:
+                    scales = qweight.q_per_channel_scales()
+                    zero_points = qweight.q_per_channel_zero_points()
+                    print("%s weight:" % k, qweight)
+                    print("%s scales:" % k, scales)
+                    print("%s zero points:" % k, zero_points)
+            else:
+                print(k, v)
+
 
     def test_quant_script():
         conv_layer = ConvModel().eval()
@@ -405,23 +423,43 @@ def test_parse_param():
 inp = torch.rand(1, 3, 224, 224, dtype=torch.float)
 input_name = 'X'
 input_shapes = {input_name: (1, 3, 224, 224)}
-# raw_model = AnnotatedConvBnModel().eval()
-# qutils.quantize_model(raw_model, "fbgemm")
-raw_model = models.resnet.resnet18(pretrained=True).eval()
+raw_model = AnnotatedConvBnModel().eval()
+quantize_model(raw_model)
+# raw_model = models.resnet.resnet18(pretrained=True).eval()
+
 script_module = torch.jit.trace(raw_model, inp).eval()
 torch._C._jit_pass_inline(script_module.graph)
+print(script_module.graph)
+
 mod, params = parse_script_module(script_module, input_shapes)
-# print(script_module.graph)
 
-with torch.no_grad():
-    pt_result = script_module(inp).numpy()
+for (k, v) in script_module.state_dict().items():
+    if k.endswith("_packed_params"):
+        qweight, _ = torch.ops.quantized.conv2d_unpack(v)
+        if str(qweight.qscheme() == "torch.per_tensor_affine"):
+            scales = qweight.q_scale()
+            zero_points = qweight.q_zero_point()
+            print("%s weight:" % k, qweight)
+            print("%s scales:" % k, scales)
+            print("%s zero points:" % k, zero_points)
+        else:
+            scales = qweight.q_per_channel_scales()
+            zero_points = qweight.q_per_channel_zero_points()
+            print("%s weight:" % k, qweight)
+            print("%s scales:" % k, scales)
+            print("%s zero points:" % k, zero_points)
+    else:
+        print(k, v)
 
-with relay.build_config(opt_level=3):
-    json, lib, param = relay.build(mod, target="llvm", params=params)
+# with torch.no_grad():
+#     pt_result = script_module(inp).numpy()
 
-runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context("cpu", 0))
-runtime.set_input(**param)
-runtime.set_input("X", inp.numpy())
-runtime.run()
-tvm_result = runtime.get_output(0).asnumpy()
-np.allclose(tvm_result, pt_result)
+# with relay.build_config(opt_level=3):
+#     json, lib, param = relay.build(mod, target="llvm", params=params)
+
+# runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context("cpu", 0))
+# runtime.set_input(**param)
+# runtime.set_input("X", inp.numpy())
+# runtime.run()
+# tvm_result = runtime.get_output(0).asnumpy()
+# np.allclose(tvm_result, pt_result)
