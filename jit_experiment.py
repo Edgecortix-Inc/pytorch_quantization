@@ -171,12 +171,12 @@ class QuantParam:
 
 class QuantVar:
     def __init__(self, qparam, block_name):
-        self.weight_var = _expr.var(block_name + "_weight",
-                                    shape=qparam.weight.shape)
-        self.scales_var = _expr.var(block_name + "_scales",
-                                    shape=qparam.scales.shape)
-        self.zero_points_var = _expr.var(block_name + "_zero_points",
-                                         shape=qparam.zero_points.shape)
+        self.weight = _expr.var(block_name + "_weight",
+                                shape=qparam.weight.shape)
+        self.scales = _expr.var(block_name + "_scales",
+                                shape=qparam.scales.shape)
+        self.zero_points = _expr.var(block_name + "_zero_points",
+                                     shape=qparam.zero_points.shape)
 
 
 def parse_script_module(script_module, input_shapes):
@@ -323,12 +323,13 @@ def parse_script_module(script_module, input_shapes):
                 input_list_r.append(relay.const(consts[inode]))
             elif inode in packed_param_nodes.keys():
                 key = packed_param_nodes[inode]
-                input_list_r.append(relay.qnn.op.quantize(quant_param_vars[key].weight_var,
-                                                          quant_param_vars[key].scales_var,
-                                                          quant_param_vars[key].zero_points_var,
+                qparam = quant_param_vars[key]
+                input_list_r.append(relay.qnn.op.quantize(qparam.weight,
+                                                          qparam.scales,
+                                                          qparam.zero_points,
                                                           out_dtype="uint8"))
-                input_list_r.append(quant_param_vars[key].scales_var)
-                input_list_r.append(quant_param_vars[key].zero_points_var)
+                input_list_r.append(quant_param_vars[key].scales)
+                input_list_r.append(quant_param_vars[key].zero_points)
             else:
                 input_list_r.append("call/var."+inode)
                 if op_node.kind() == 'prim::ListConstruct':
@@ -432,9 +433,9 @@ def parse_script_module(script_module, input_shapes):
     for (k, v) in quant_params.items():
         assert k in quant_param_vars
         quant_param_var = quant_param_vars[k]
-        param[quant_param_var.weight_var.name_hint] = tvm.nd.array(v.weight)
-        param[quant_param_var.scales_var.name_hint] = tvm.nd.array(v.scales)
-        param[quant_param_var.zero_points_var.name_hint] = tvm.nd.array(v.zero_points)
+        param[quant_param_var.weight.name_hint] = tvm.nd.array(v.weight)
+        param[quant_param_var.scales.name_hint] = tvm.nd.array(v.scales)
+        param[quant_param_var.zero_points.name_hint] = tvm.nd.array(v.zero_points)
 
     return None, None
     return  _module.Module.from_expr(func), param
