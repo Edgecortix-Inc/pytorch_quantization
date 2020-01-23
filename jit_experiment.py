@@ -360,12 +360,17 @@ def parse_script_module(script_module, input_shapes):
         if op_node.kind() in ['aten::ones', 'aten::zeros']:
             input_list_types[0] = node_type.scalarType().lower()
 
-        if op_node.kind() == "aten::dequantize":
+        needs_input_quant_param = ["aten::dequantize", "quantized::conv2d_relu", "quantized::conv2d"]
+        if op_node.kind() in needs_input_quant_param:
             input_list_r.append(relay.const(input_scale))
             input_list_r.append(relay.const(input_zero_point))
+        if op_node.kind() == "quantized::conv2d_relu":
+            input_list_r.append(True) # do relu
+        if op_node.kind() == "quantized::conv2d":
+            input_list_r.append(False) # no relu
 
         if len(input_list_r) > 0:
-            print("input to the node %s =" % node_id, input_list_r)
+            print("input to the node has %d arg, %s =" % (len(input_list_r), node_id), input_list_r)
         op_inputs_r[node_id] = input_list_r
         op_inputs_types[node_id] = input_list_types
 
@@ -375,8 +380,8 @@ def parse_script_module(script_module, input_shapes):
     print("\n Quantization params:")
     for (k, v) in quant_params.items():
         print("block = %s, scales =" % k, v.scales, ", zero_points =", v.zero_points)
-    print("input_scale:", input_scale)
-    print("input_zero_point:", input_zero_point)
+    # print("input_scale:", input_scale)
+    # print("input_zero_point:", input_zero_point)
     print("packed param nodes:")
     for n in packed_param_nodes:
         print(n)
@@ -435,6 +440,7 @@ def parse_script_module(script_module, input_shapes):
     else:
         body = outputs[-1]
 
+    print(body)
     func = tvm.relay.Function(_analysis.free_vars(body), body)
     param = {k: tvm.nd.array(v) for k, v in param_tensors.items()}
     for (k, v) in quant_params.items():
@@ -444,7 +450,6 @@ def parse_script_module(script_module, input_shapes):
         param[quant_param_var.scales.name_hint] = tvm.nd.array(v.scales)
         param[quant_param_var.zero_points.name_hint] = tvm.nd.array(v.zero_points)
 
-    return None, None
     return  _module.Module.from_expr(func), param
 
 
