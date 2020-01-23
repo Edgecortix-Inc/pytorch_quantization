@@ -218,23 +218,24 @@ def parse_script_module(script_module, input_shapes):
 
         return param
 
+    def get_input_quant_param(state_dict):
+        input_scale = state_dict["quant.scale"]
+        input_zero_point = state_dict["quant.zero_point"]
+        return input_scale, input_zero_point
+
     def parse_params():
         state_dict = script_module.state_dict()
         param_names = set()
         for key, value in state_dict.items():
             if key.endswith("_packed_params"):
-                print(key)
                 block_name = key[:-len("._packed_params")]
                 quant_params[block_name] = unpack_quant_params(key, value)
-            elif key.startswith("quant"):
-                print(key, value)
-            else:
-                param_str = str(key)
-                param_name = param_str.split('.')[-1]
-                param_names.add(param_name)
+
+            param_str = str(key)
+            param_name = param_str.split('.')[-1]
+            param_names.add(param_name)
 
         input_names = [i for i in inputs_r.keys()]
-        print("")
         # Iterate through graph for getAttr nodes and match full state_dict name to nodes
         node_weight_map = {}
         for node in script_module.graph.nodes():
@@ -244,19 +245,17 @@ def parse_script_module(script_module, input_shapes):
                 node_getattr_name = node.s(attribute_names[0])
                 node_arg = node.input().debugName()
                 node_name = node.output().debugName()
-                print("node_name, node_getattr_name, node_arg", node_name, node_getattr_name, node_arg)
                 if node_arg in input_names:
                     node_weight_map[node_name] = node_getattr_name
-                    print("node_weight_map: %s -> %s " % (node_name, node_getattr_name))
                 else:
                     previous_map = node_weight_map[node_arg[:]]
                     node_weight_map[node_name] = previous_map+"."+node_getattr_name
-                    print("prev map: %s -> %s" % (node_arg, previous_map))
-                    print("new map: %s -> %s" % (node_name, node_weight_map[node_name]))
-
                 if node_getattr_name in param_names:
-                    print("Looking up node_name:", node_weight_map[node_name])
-                    value = state_dict[node_weight_map[node_name]]
+                    key = node_weight_map[node_name]
+                    # TODO: fix for fc
+                    if key == "fc._packed_params":
+                        key += "._packed_params"
+                    value = state_dict[key]
                     tensor = tvm.nd.array(value.cpu().numpy())
                     shape = tensor.shape
                     param_tensors[node_name] = tensor
@@ -330,6 +329,7 @@ def parse_script_module(script_module, input_shapes):
             except Exception as e:
                 print('Internal PyTorch error. Failed to grab type.')
 
+        print("add_op: %s has %d inputs." % (op_node.kind(), len(input_list_r)))
         node_type = op_node.output().type()
         if op_node.kind() in ['aten::ones', 'aten::zeros']:
             input_list_types[0] = node_type.scalarType().lower()
@@ -339,11 +339,14 @@ def parse_script_module(script_module, input_shapes):
 
     parse_inputs()
     parse_params()
+    input_scale, input_zero_point = get_input_quant_param(script_module.state_dict())
     print("\n Quantization params:")
     for (k, v) in quant_params.items():
         print("block = %s, scales.shape =" % k, v.scales.shape, ", zero_points.shape =", v.zero_points.shape)
-    return None, None
+    print("input_scale:", input_scale)
+    print("input_zero_point\n", input_zero_point)
     parse_ops()
+    return None, None
 
     nid = 0
     outputs = []
@@ -502,9 +505,9 @@ raw_model = AnnotatedConvBnModel().eval()
 # inp = torch.rand(1, 1, 5, 5, dtype=torch.float)
 # input_shapes = {input_name: (1, 1, 5, 5)}
 # raw_model = TwoLayerLinearModel()
-quantize_model(raw_model, inp)
+# quantize_model(raw_model, inp)
 
-# raw_model = qresnet.resnet18(pretrained=True, quantize=True).eval()
+raw_model = qresnet.resnet18(pretrained=True, quantize=True).eval()
 
 script_module = torch.jit.trace(raw_model, inp).eval()
 torch._C._jit_pass_inline(script_module.graph)
