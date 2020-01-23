@@ -11,7 +11,7 @@ def _quantize_per_tensor():
 
 def _dequantize():
     def _impl(inputs, input_type):
-        return inputs[0]
+        return relay.qnn.op.dequantize(inputs[0], inputs[1], inputs[2])
     return _impl
 
 
