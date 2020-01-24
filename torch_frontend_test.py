@@ -853,7 +853,8 @@ def parse_script_module(script_module, input_shapes):
         # Traverse nodes and add to graph
         for node in script_module.graph.nodes():
             node_name = node.output().debugName()
-            if node.kind() == "prim::Constant" and len(node.attributeNames()) == 1:
+            attribute_names = node.attributeNames()
+            if node.kind() == "prim::Constant" and len(attribute_names) == 1:
                 attribute_names = node.attributeNames()
                 attr_name = attribute_names[0]
                 ty = node.output().type().kind()
@@ -863,6 +864,9 @@ def parse_script_module(script_module, input_shapes):
                     consts[node_name] = node.f(attr_name)
                 else:
                     assert(False) # TODO: handle other types
+            if node.kind() == "prim::Constant" and len(attribute_names) == 0:
+                print("Found None node at", node_name)
+                consts[node_name] = None
             elif node.kind() == "prim::ListConstruct":
                 list_shape = []
                 for input_node in node.inputs():
@@ -888,10 +892,14 @@ def parse_script_module(script_module, input_shapes):
                 print("Add input: ", inputs_r[input_node.debugName()])
                 input_list_r.append(inputs_r[input_node.debugName()])
             elif input_node.debugName() in params.keys():
+                print("Add param: ", params[input_node.debugName()])
                 input_list_r.append(params[input_node.debugName()])
             elif input_node.node().kind() == "prim::Constant" and \
                  len(input_node.node().attributeNames()) == 1:
                 input_list_r.append(consts[input_node.debugName()])
+            elif input_node.node().kind() == "prim::Constant" and \
+                 len(input_node.node().attributeNames()) == 0:
+                input_list_r.append(None)
             else:
                 input_list_r.append("call/var."+input_node.debugName())
                 if op_node.kind() == 'prim::ListConstruct':
@@ -928,50 +936,40 @@ def parse_script_module(script_module, input_shapes):
 
     nid = 0
     outputs = []
+    for pairs in [inputs_r, params]:
+        for k, v in pairs.items():
+            nid_to_node_name[k] = nid
+            outputs.append(v)
+            nid += 1
+
     for node_id, op_node in ops.items():
         operator = op_node.kind()
-        print(operator)
+        print("Node id:", node_id)
         if operator == 'prim::ListConstruct':
-            if any(inp.debugName() in nid_to_node_name.keys() \
-                   for inp in op_node.inputs()):
-                listconstr = []
-                for i in op_node.inputs():
-                    if i.debugName() in nid_to_node_name.keys():
-                        listconstr.append( \
-                            outputs[nid_to_node_name[i.debugName()]])
-                    elif i.node().kind() == 'prim::Constant':
-                        listconstr.append(int(consts[i.debugName()]))
-                    elif i.debugName() in inputs_r.keys():
-                        listconstr.append(int(inputs_r[i.debugName()]))
-
-                # Unwrap for tensors
-                if len(listconstr) == 1:
-                    listconstr = listconstr[0]
-
-                outputs.append(listconstr)
-                nid_to_node_name[node_id] = nid
-                nid = nid + 1
-        elif op_node.kind() != "prim::Constant":
+            listconstr = []
             for i in op_node.inputs():
-                if i.debugName() in nid_to_node_name.keys():
-                    for cnt in range(0, len(op_inputs_r[node_id])):
-                        if isinstance(op_inputs_r[node_id][cnt], str):
-                            if "call/var" in op_inputs_r[node_id][cnt]:
-                                op_inputs_r[node_id][cnt] = \
-                                    outputs[nid_to_node_name[i.debugName()]]
-                                break
+                inode_id = nid_to_node_name[i.debugName()]
+                listconstr.append(outputs[inode_id])
+            # Unwrap for tensors
+            if len(listconstr) == 1:
+                listconstr = listconstr[0]
+            outputs.append(listconstr)
+        elif op_node.kind() == "prim::Constant":
+            outputs.append(consts[op_node.output().debugName()])
+        else:
+            for ind, i in enumerate(op_node.inputs()):
+                print("inode: ",i.debugName())
+                inode_id = nid_to_node_name[i.debugName()]
+                op_inputs_r[node_id][ind] = outputs[inode_id]
 
             call = convert_map[operator](op_inputs_r[node_id],
                                          op_inputs_types[node_id])
             outputs.append(call)
-            nid_to_node_name[node_id] = nid
-            nid = nid + 1
 
-    if len(outputs) == 1:
-        body = outputs[0]
-    else:
-        body = outputs[-1]
+        nid_to_node_name[node_id] = nid
+        nid = nid + 1
 
+    body = outputs[-1]
     func = tvm.relay.Function(_analysis.free_vars(body), body)
     param = {k: tvm.nd.array(v) for k, v in param_tensors.items()}
 
@@ -990,7 +988,7 @@ class ConvBNReLU(nn.Sequential):
 inp = torch.rand(1, 3, 224, 224, dtype=torch.float)
 input_name = 'X'
 input_shapes = {input_name: (1, 3, 224, 224)}
-#raw_model = models.resnet.resnet18(pretrained=True).eval()
+# raw_model = models.resnet.resnet18(pretrained=True).eval()
 raw_model = ConvBNReLU(3, 3)
 script_module = torch.jit.trace(raw_model, inp).eval()
 torch._C._jit_pass_inline(script_module.graph)
