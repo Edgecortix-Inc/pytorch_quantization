@@ -913,20 +913,18 @@ def parse_script_module(script_module, input_shapes):
     parse_params()
     parse_ops()
 
-    nid = 0
     outputs = []
-    for pairs in [inputs_r, params]:
-        for k, v in pairs.items():
-            nid_to_node_name[k] = nid
-            outputs.append(v)
-            nid += 1
+    for k, v in {**inputs_r, **params}.items():
+        nid_to_node_name[k] = len(outputs)
+        outputs.append(v)
 
+    nid = len(outputs)
     for node_id, op_node in ops.items():
         operator = op_node.kind()
         node_name = op_node.output().debugName()
         if operator == 'prim::ListConstruct':
             outputs.append(outputs[nid_to_node_name[node_name]])
-        elif op_node.kind() == "prim::Constant":
+        elif operator == "prim::Constant":
             outputs.append(consts[node_name])
         else:
             op_inputs = []
@@ -939,7 +937,7 @@ def parse_script_module(script_module, input_shapes):
             outputs.append(call)
 
         nid_to_node_name[node_id] = nid
-        nid = nid + 1
+        nid += 1
 
     body = outputs[-1]
     func = tvm.relay.Function(_analysis.free_vars(body), body)
@@ -948,26 +946,13 @@ def parse_script_module(script_module, input_shapes):
     return _module.Module.from_expr(func), param
 
 
-class ConvBNReLU(nn.Sequential):
-    def __init__(self, in_planes, out_planes, kernel_size=3, stride=1, groups=1):
-        padding = (kernel_size - 1) // 2
-        super().__init__(
-            nn.Conv2d(in_planes, out_planes, kernel_size, stride, padding, groups=groups, bias=False),
-            nn.BatchNorm2d(out_planes, momentum=0.1),
-            # Replace with ReLU
-            nn.ReLU(inplace=False)
-        )
-
-
 inp = torch.rand(1, 3, 224, 224, dtype=torch.float)
 input_name = 'X'
 input_shapes = {input_name: (1, 3, 224, 224)}
 raw_model = models.resnet.resnet18(pretrained=True).eval()
-# raw_model = nn.Sequential(ConvBNReLU(3, 3), nn.MaxPool2d(2))
 script_module = torch.jit.trace(raw_model, inp).eval()
 torch._C._jit_pass_inline(script_module.graph)
 mod, params = parse_script_module(script_module, input_shapes)
-
 
 with torch.no_grad():
     pt_result = script_module(inp).numpy()
