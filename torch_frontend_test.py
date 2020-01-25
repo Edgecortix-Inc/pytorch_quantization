@@ -792,7 +792,6 @@ convert_map = {
 
 def parse_script_module(script_module, input_shapes):
     inputs_r = {}
-    fn_param = []
     params = {}
     param_tensors = {}
     consts = {}
@@ -810,7 +809,7 @@ def parse_script_module(script_module, input_shapes):
             input_var = _expr.var(input_name,
                                   shape=input_shapes[input_name])
             inputs_r[input_name] = input_var # X: (1, 3, 224, 224)
-            fn_param.append(input_var)
+
         # Add self (first input of a PyTorch graph) to inputs
         input_shape = [3]
         tensor = tvm.nd.array(np.zeros(input_shape).astype(np.float32))
@@ -846,7 +845,6 @@ def parse_script_module(script_module, input_shapes):
                     param_tensors[node_name] = tensor
                     params[node_name] = _expr.var(node_name,
                                                   shape=shape)
-                    fn_param.append(params[node_name])
 
     def parse_ops():
         # Traverse nodes and add to graph
@@ -861,7 +859,10 @@ def parse_script_module(script_module, input_shapes):
                         consts[node_name] = node.i(attr_name)
                     elif ty == "FloatType":
                         consts[node_name] = node.f(attr_name)
+                    elif ty == "TensorType":
+                        consts[node_name] = node.t(attr_name)
                     else:
+                        print(ty)
                         assert False # TODO: handle other types
                 else:
                     consts[node_name] = None
@@ -920,7 +921,6 @@ def parse_script_module(script_module, input_shapes):
 
     for node_name, op_node in ops.items():
         operator = op_node.kind()
-
         if operator == 'prim::ListConstruct':
             nid = node_name_to_nid[node_name]
             outputs.append(outputs[nid])
@@ -948,20 +948,28 @@ def parse_script_module(script_module, input_shapes):
 inp = torch.rand(1, 3, 224, 224, dtype=torch.float)
 input_name = 'X'
 input_shapes = {input_name: (1, 3, 224, 224)}
-raw_model = models.resnet.resnet18(pretrained=True).eval()
-script_module = torch.jit.trace(raw_model, inp).eval()
-torch._C._jit_pass_inline(script_module.graph)
-mod, params = parse_script_module(script_module, input_shapes)
+models = [
+    models.resnet.resnet18(pretrained=True).eval(),
+    models.vgg.vgg16_bn(pretrained=True).eval(),
+    # models.mobilenet.mobilenet_v2(pretrained=True).eval(),
+    # models.inception.inception_v3(pretrained=True).eval()
+    # models.squeezenet.squeezenet1_1(pretrained=True).eval(),
+    # models.densenet.densenet121(pretrained=True).eval(),
+]
+for raw_model in models:
+    script_module = torch.jit.trace(raw_model, inp).eval()
+    torch._C._jit_pass_inline(script_module.graph)
+    mod, params = parse_script_module(script_module, input_shapes)
 
-with torch.no_grad():
-    pt_result = script_module(inp).numpy()
+    with torch.no_grad():
+        pt_result = script_module(inp).numpy()
 
-with relay.build_config(opt_level=3):
-    json, lib, param = relay.build(mod, target="llvm", params=params)
+    with relay.build_config(opt_level=3):
+        json, lib, param = relay.build(mod, target="llvm", params=params)
 
-runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context("cpu", 0))
-runtime.set_input(**param)
-runtime.set_input("X", inp.numpy())
-runtime.run()
-tvm_result = runtime.get_output(0).asnumpy()
-np.allclose(tvm_result, pt_result)
+    runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context("cpu", 0))
+    runtime.set_input(**param)
+    runtime.set_input("X", inp.numpy())
+    runtime.run()
+    tvm_result = runtime.get_output(0).asnumpy()
+    np.allclose(tvm_result, pt_result)
