@@ -1,9 +1,5 @@
-import torch
-from torchvision import models
-
 import numpy as np
 import tvm
-from tvm import relay
 from tvm.relay import expr as _expr
 from tvm.relay import analysis as _analysis
 from tvm.relay import module as _module
@@ -169,6 +165,7 @@ def get_op_inputs(op_node, outputs, name_map):
     for i in op_node.inputs():
         inode_name = name_map[i.debugName()]
         inputs.append(outputs[inode_name])
+        print("Added ", i.debugName(), " to ", op_node.kind())
     return inputs
 
 
@@ -183,7 +180,7 @@ def parse_script_module(script_module, input_shapes):
     if packed_param_map:
         quantized = True
         params = script_module.state_dict()
-        weight_quant_params = qnn_torch.get_weight_quant_param(params)
+        weight_quant_params = qnn_torch.get_weight_quant_params(params)
         quant_param_vars = qnn_torch.get_quant_param_vars(weight_quant_params)
         input_scale, input_zero_point = qnn_torch.get_input_quant_param(params)
 
@@ -193,11 +190,14 @@ def parse_script_module(script_module, input_shapes):
     node_name_to_nid = dict(zip(input_vars.keys(), range(len(outputs))))
 
     if quantized:
-        qnn_torch.add_input_quant_params(outputs, node_name_to_nid,
-                                         packed_param_map, quant_param_vars)
+        qnn_torch.add_quant_params_to_outputs(outputs, node_name_to_nid,
+                                              packed_param_map,
+                                              quant_param_vars)
+        convert_map.update(qnn_torch.convert_map)
 
     for node_name, op_node in ops.items():
         operator = op_node.kind()
+        print("operator:", operator)
         if operator == "prim::Constant":
             node_name_to_nid[node_name] = len(outputs)
             outputs.append(consts[node_name])
@@ -205,12 +205,13 @@ def parse_script_module(script_module, input_shapes):
             node_name_to_nid[node_name] = len(outputs)
             inputs = get_op_inputs(op_node, outputs, node_name_to_nid)
             if quantized:
-                qnn_torch.add_input_quant_param(operator, inputs,
-                                                input_scale, input_zero_point)
+                qnn_torch.add_input_quant_params(operator, inputs,
+                                                 input_scale, input_zero_point)
             call = convert_map[operator](inputs, op_in_types[node_name])
             outputs.append(call)
 
     body = outputs[-1]
+    print(body)
     func = tvm.relay.Function(_analysis.free_vars(body), body)
     param = {k: tvm.nd.array(v) for k, v in param_tensors.items()}
 
@@ -218,33 +219,3 @@ def parse_script_module(script_module, input_shapes):
         qnn_torch.add_quant_params(param, quant_param_vars, weight_quant_params)
 
     return _module.Module.from_expr(func), param
-
-
-inp = torch.rand(1, 3, 224, 224, dtype=torch.float)
-input_name = 'X'
-input_shapes = {input_name: (1, 3, 224, 224)}
-models = [
-    models.resnet.resnet18(pretrained=True).eval(),
-    # models.vgg.vgg16_bn(pretrained=True).eval(),
-    # models.mobilenet.mobilenet_v2(pretrained=True).eval(),
-    # models.inception.inception_v3(pretrained=True).eval()
-    # models.squeezenet.squeezenet1_1(pretrained=True).eval(),
-    # models.densenet.densenet121(pretrained=True).eval(),
-]
-for raw_model in models:
-    script_module = torch.jit.trace(raw_model, inp).eval()
-    torch._C._jit_pass_inline(script_module.graph)
-    mod, params = parse_script_module(script_module, input_shapes)
-
-    with torch.no_grad():
-        pt_result = script_module(inp).numpy()
-
-    with relay.build_config(opt_level=3):
-        json, lib, param = relay.build(mod, target="llvm", params=params)
-
-    runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context("cpu", 0))
-    runtime.set_input(**param)
-    runtime.set_input("X", inp.numpy())
-    runtime.run()
-    tvm_result = runtime.get_output(0).asnumpy()
-    np.allclose(tvm_result, pt_result)

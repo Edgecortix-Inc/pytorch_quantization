@@ -6,7 +6,7 @@ from tvm.relay import expr as _expr
 from tvm.relay import op as _op
 from tvm.relay.frontend.common import get_relay_op
 from tvm.relay.frontend.common import infer_shape as _infer_shape
-from tvm.relay.frontend.common import infer_value as _infer_value
+
 
 # operator implementation
 def _elemwise(name):
