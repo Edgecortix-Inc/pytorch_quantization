@@ -146,12 +146,6 @@ def get_op_inputs(op_node, outputs, name_map):
     for i in op_node.inputs():
         inode_name = name_map[i.debugName()]
         inputs.append(outputs[inode_name])
-
-    if op_node.kind() == "quantized::conv2d_relu":
-        inputs.add(True)  # do relu
-    if op_node.kind() == "quantized::conv2d":
-        inputs.append(False)  # no relu
-
     return inputs
 
 
@@ -168,6 +162,7 @@ def parse_script_module(script_module, input_shapes):
         params = script_module.state_dict()
         weight_quant_params = qnn_torch.get_weight_quant_param(params)
         quant_param_vars = qnn_torch.get_quant_param_vars(weight_quant_params)
+        input_scale, input_zero_point = qnn_torch.get_input_quant_param(params)
 
     input_vars.update(param_vars)
     input_vars.update(list_vars)
@@ -186,6 +181,9 @@ def parse_script_module(script_module, input_shapes):
         elif operator != 'prim::ListConstruct':
             node_name_to_nid[node_name] = len(outputs)
             inputs = get_op_inputs(op_node, outputs, node_name_to_nid)
+            if quantized:
+                qnn_torch.add_input_quant_param(operator, inputs,
+                                                input_scale, input_zero_point)
             call = convert_map[operator](inputs, op_in_types[node_name])
             outputs.append(call)
 
