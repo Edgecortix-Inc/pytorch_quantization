@@ -797,7 +797,6 @@ def parse_script_module(script_module, input_shapes):
     param_tensors = {}
     consts = {}
     ops = {}
-    op_inputs_r = {}
     op_inputs_types = {}
     nid_to_node_name = {}
 
@@ -839,7 +838,7 @@ def parse_script_module(script_module, input_shapes):
                     node_weight_map[node_name] = node_getattr_name
                 else:
                     previous_map = node_weight_map[node_arg[:]]
-                    node_weight_map[node_name] = previous_map+"."+node_getattr_name
+                    node_weight_map[node_name] = previous_map + "." +node_getattr_name
                 if node_getattr_name in param_names:
                     value = state_dict[node_weight_map[node_name]]
                     tensor = tvm.nd.array(value.cpu().numpy())
@@ -863,7 +862,7 @@ def parse_script_module(script_module, input_shapes):
                     elif ty == "FloatType":
                         consts[node_name] = node.f(attr_name)
                     else:
-                        assert(False) # TODO: handle other types
+                        assert False # TODO: handle other types
                 else:
                     consts[node_name] = None
             elif node.kind() == "prim::ListConstruct":
@@ -871,7 +870,7 @@ def parse_script_module(script_module, input_shapes):
                 for input_node in node.inputs():
                     if input_node.debugName() in inputs_r.keys():
                         # TODO
-                        assert(False)
+                        assert False
                     elif input_node.debugName() in consts.keys():
                         c = consts[input_node.debugName()]
                         assert(isinstance(c, int))
@@ -884,23 +883,8 @@ def parse_script_module(script_module, input_shapes):
 
     def add_op(node_id, op_node):
         ops[node_id] = op_node
-        input_list_r = []
         input_list_types = []
         for input_node in op_node.inputs():
-            attribute_names = input_node.node().attributeNames()
-            num_attributes = len(attribute_names)
-            if input_node.debugName() in inputs_r.keys():
-                input_list_r.append(inputs_r[input_node.debugName()])
-            elif input_node.debugName() in params.keys():
-                input_list_r.append(params[input_node.debugName()])
-            elif input_node.node().kind() == "prim::Constant" and num_attributes  == 1:
-                input_list_r.append(_expr.const(consts[input_node.debugName()]))
-            elif input_node.node().kind() == "prim::Constant" and num_attributes == 0:
-                input_list_r.append(None)
-            else:
-                # placeholder
-                input_list_r.append(_expr.var("", shape=()))
-
             try:
                 input_node_kind = input_node.type().kind()
                 if input_node_kind == 'TensorType':
@@ -923,7 +907,6 @@ def parse_script_module(script_module, input_shapes):
         if op_node.kind() in ['aten::ones', 'aten::zeros']:
             input_list_types[0] = node_type.scalarType().lower()
 
-        op_inputs_r[node_id] = input_list_r
         op_inputs_types[node_id] = input_list_types
 
     parse_inputs()
@@ -944,13 +927,14 @@ def parse_script_module(script_module, input_shapes):
         if operator == 'prim::ListConstruct':
             outputs.append(outputs[nid_to_node_name[node_name]])
         elif op_node.kind() == "prim::Constant":
-            outputs.append(consts[op_node.output().debugName()])
+            outputs.append(consts[node_name])
         else:
+            op_inputs = []
             for ind, i in enumerate(op_node.inputs()):
                 inode_id = nid_to_node_name[i.debugName()]
-                op_inputs_r[node_id][ind] = outputs[inode_id]
+                op_inputs.append(outputs[inode_id])
 
-            call = convert_map[operator](op_inputs_r[node_id],
+            call = convert_map[operator](op_inputs,
                                          op_inputs_types[node_id])
             outputs.append(call)
 
