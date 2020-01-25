@@ -854,19 +854,18 @@ def parse_script_module(script_module, input_shapes):
         for node in script_module.graph.nodes():
             node_name = node.output().debugName()
             attribute_names = node.attributeNames()
-            if node.kind() == "prim::Constant" and len(attribute_names) == 1:
-                attribute_names = node.attributeNames()
-                attr_name = attribute_names[0]
-                ty = node.output().type().kind()
-                if ty == "IntType" or ty == "BoolType":
-                    consts[node_name] = node.i(attr_name)
-                elif ty == "FloatType":
-                    consts[node_name] = node.f(attr_name)
+            if node.kind() == "prim::Constant":
+                if len(attribute_names) == 1:
+                    attr_name = attribute_names[0]
+                    ty = node.output().type().kind()
+                    if ty == "IntType" or ty == "BoolType":
+                        consts[node_name] = node.i(attr_name)
+                    elif ty == "FloatType":
+                        consts[node_name] = node.f(attr_name)
+                    else:
+                        assert(False) # TODO: handle other types
                 else:
-                    assert(False) # TODO: handle other types
-            if node.kind() == "prim::Constant" and len(attribute_names) == 0:
-                print("Found None node at", node_name)
-                consts[node_name] = None
+                    consts[node_name] = None
             elif node.kind() == "prim::ListConstruct":
                 list_shape = []
                 for input_node in node.inputs():
@@ -888,23 +887,20 @@ def parse_script_module(script_module, input_shapes):
         input_list_r = []
         input_list_types = []
         for input_node in op_node.inputs():
+            attribute_names = input_node.node().attributeNames()
+            num_attributes = len(attribute_names)
             if input_node.debugName() in inputs_r.keys():
-                print("Add input: ", inputs_r[input_node.debugName()])
                 input_list_r.append(inputs_r[input_node.debugName()])
             elif input_node.debugName() in params.keys():
-                print("Add param: ", params[input_node.debugName()])
                 input_list_r.append(params[input_node.debugName()])
-            elif input_node.node().kind() == "prim::Constant" and \
-                 len(input_node.node().attributeNames()) == 1:
-                input_list_r.append(consts[input_node.debugName()])
-            elif input_node.node().kind() == "prim::Constant" and \
-                 len(input_node.node().attributeNames()) == 0:
+            elif input_node.node().kind() == "prim::Constant" and num_attributes  == 1:
+                input_list_r.append(_expr.const(consts[input_node.debugName()]))
+            elif input_node.node().kind() == "prim::Constant" and num_attributes == 0:
                 input_list_r.append(None)
             else:
-                input_list_r.append("call/var."+input_node.debugName())
-                if op_node.kind() == 'prim::ListConstruct':
-                    if node_id in inputs_r.keys():
-                        inputs_r.pop(node_id)
+                # placeholder
+                input_list_r.append(_expr.var("", shape=()))
+
             try:
                 input_node_kind = input_node.type().kind()
                 if input_node_kind == 'TensorType':
@@ -944,21 +940,13 @@ def parse_script_module(script_module, input_shapes):
 
     for node_id, op_node in ops.items():
         operator = op_node.kind()
-        print("Node id:", node_id)
+        node_name = op_node.output().debugName()
         if operator == 'prim::ListConstruct':
-            listconstr = []
-            for i in op_node.inputs():
-                inode_id = nid_to_node_name[i.debugName()]
-                listconstr.append(outputs[inode_id])
-            # Unwrap for tensors
-            if len(listconstr) == 1:
-                listconstr = listconstr[0]
-            outputs.append(listconstr)
+            outputs.append(outputs[nid_to_node_name[node_name]])
         elif op_node.kind() == "prim::Constant":
             outputs.append(consts[op_node.output().debugName()])
         else:
             for ind, i in enumerate(op_node.inputs()):
-                print("inode: ",i.debugName())
                 inode_id = nid_to_node_name[i.debugName()]
                 op_inputs_r[node_id][ind] = outputs[inode_id]
 
@@ -975,6 +963,7 @@ def parse_script_module(script_module, input_shapes):
 
     return _module.Module.from_expr(func), param
 
+
 class ConvBNReLU(nn.Sequential):
     def __init__(self, in_planes, out_planes, kernel_size=3, stride=1, groups=1):
         padding = (kernel_size - 1) // 2
@@ -985,15 +974,16 @@ class ConvBNReLU(nn.Sequential):
             nn.ReLU(inplace=False)
         )
 
+
 inp = torch.rand(1, 3, 224, 224, dtype=torch.float)
 input_name = 'X'
 input_shapes = {input_name: (1, 3, 224, 224)}
-# raw_model = models.resnet.resnet18(pretrained=True).eval()
-raw_model = ConvBNReLU(3, 3)
+raw_model = models.resnet.resnet18(pretrained=True).eval()
+# raw_model = nn.Sequential(ConvBNReLU(3, 3), nn.MaxPool2d(2))
 script_module = torch.jit.trace(raw_model, inp).eval()
 torch._C._jit_pass_inline(script_module.graph)
 mod, params = parse_script_module(script_module, input_shapes)
-print(script_module.graph)
+
 
 with torch.no_grad():
     pt_result = script_module(inp).numpy()
