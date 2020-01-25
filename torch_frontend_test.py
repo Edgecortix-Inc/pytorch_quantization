@@ -8,7 +8,9 @@ from tvm.relay import expr as _expr
 from tvm.relay import analysis as _analysis
 from tvm.relay import module as _module
 
-from tvm_conversion import convert_map
+import qnn_torch
+from relay_conversion import convert_map
+
 
 
 def parse_inputs(script_module, input_shapes):
@@ -42,6 +44,7 @@ def parse_params(script_module, input_vars):
 
     input_names = [i for i in input_vars.keys()]
     node_weight_map = {}
+    packed_param_name_map = {}
     for node in script_module.graph.nodes():
         if node.kind() == "prim::GetAttr":
             attribute_names = node.attributeNames()
@@ -55,12 +58,20 @@ def parse_params(script_module, input_vars):
                 previous_map = node_weight_map[node_arg]
                 node_weight_map[node_name] = previous_map + "." + attr_name
             if attr_name in param_names:
-                value = state_dict[node_weight_map[node_name]]
-                tensor = tvm.nd.array(value.cpu().numpy())
-                param_tensors[node_name] = tensor
-                params[node_name] = _expr.var(node_name,
-                                              shape=tensor.shape)
-    return params, param_tensors
+                key = node_weight_map[node_name]
+                # TODO: fix for fc
+                if key == "fc._packed_params":
+                    key += "._packed_params"
+                value = state_dict[key]
+
+                if attr_name == "_packed_params":
+                    packed_param_name_map[node_name] = key
+                else:
+                    tensor = tvm.nd.array(value.cpu().numpy())
+                    param_tensors[node_name] = tensor
+                    params[node_name] = _expr.var(node_name,
+                                                  shape=tensor.shape)
+    return params, param_tensors, packed_param_name_map
 
 
 def get_input_types(op_node):
@@ -142,8 +153,15 @@ def get_op_inputs(op_node, outputs, name_map):
 
 def parse_script_module(script_module, input_shapes):
     input_vars = parse_inputs(script_module, input_shapes)
-    param_vars, param_tensors = parse_params(script_module, input_vars)
+    param_vars, param_tensors, packed_param_name_map = \
+      parse_params(script_module, input_vars)
     consts, ops, op_in_types, list_vars = parse_ops(script_module, input_vars)
+
+    quantized = False
+    if packed_param_name_map:
+        quantized = True
+        quant_params, quant_param_vars, input_scale, input_zero_point = \
+          qnn_torch.parse_quant_param(script_module)
 
     input_vars.update(param_vars)
     input_vars.update(list_vars)
@@ -165,6 +183,14 @@ def parse_script_module(script_module, input_shapes):
     func = tvm.relay.Function(_analysis.free_vars(body), body)
     param = {k: tvm.nd.array(v) for k, v in param_tensors.items()}
 
+    if quantized:
+        for (k, v) in quant_params.items():
+            assert k in quant_param_vars
+            qvar = quant_param_vars[k]
+            param[qvar.weight.name_hint] = tvm.nd.array(v.weight)
+            param[qvar.scales.name_hint] = tvm.nd.array(v.scales)
+            param[qvar.zero_points.name_hint] = tvm.nd.array(v.zero_points)
+
     return _module.Module.from_expr(func), param
 
 
@@ -173,7 +199,7 @@ input_name = 'X'
 input_shapes = {input_name: (1, 3, 224, 224)}
 models = [
     models.resnet.resnet18(pretrained=True).eval(),
-    models.vgg.vgg16_bn(pretrained=True).eval(),
+    # models.vgg.vgg16_bn(pretrained=True).eval(),
     # models.mobilenet.mobilenet_v2(pretrained=True).eval(),
     # models.inception.inception_v3(pretrained=True).eval()
     # models.squeezenet.squeezenet1_1(pretrained=True).eval(),
