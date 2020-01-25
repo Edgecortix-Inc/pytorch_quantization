@@ -935,13 +935,10 @@ def parse_script_module(script_module, input_shapes):
 
     for node_name, op_node in ops.items():
         operator = op_node.kind()
-        if operator == 'prim::ListConstruct':
-            nid = node_name_to_nid[node_name]
-            outputs.append(outputs[nid])
-        elif operator == "prim::Constant":
+        if operator == "prim::Constant":
             node_name_to_nid[node_name] = len(outputs)
             outputs.append(consts[node_name])
-        else:
+        elif operator != 'prim::ListConstruct':
             node_name_to_nid[node_name] = len(outputs)
             inputs = get_op_inputs(op_node, outputs, node_name_to_nid)
             call = convert_map[operator](inputs, op_in_types[node_name])
