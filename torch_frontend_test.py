@@ -790,61 +790,68 @@ convert_map = {
 }
 
 
-def parse_script_module(script_module, input_shapes):
+def parse_inputs(script_module, input_shapes):
+    ir_inputs = [i for i in script_module.graph.inputs()]
+    ir_names = [i.debugName() for i in ir_inputs]
     input_vars = {}
+
+    for input_name, ir_input in zip(input_shapes, ir_inputs[1:]):
+        input_shape = input_shapes[input_name]
+        ir_input.setDebugName(input_name)
+        input_var = _expr.var(input_name,
+                              shape=input_shapes[input_name])
+        input_vars[input_name] = input_var  # X: (1, 3, 224, 224)
+
+    # Add self (first input of a PyTorch graph) to inputs
+    input_shape = [3]
+    tensor = tvm.nd.array(np.zeros(input_shape).astype(np.float32))
+    input_name = ir_names[0]  # self.1
+    input_vars[input_name] = tensor
+
+    return input_vars
+
+
+def parse_params(script_module, input_vars):
     params = {}
     param_tensors = {}
+    state_dict = script_module.state_dict()
+    param_names = set()
+    for key, value in state_dict.items():
+        param_str = str(key)
+        param_name = param_str.split('.')[-1]
+        param_names.add(param_name)
+
+    input_names = [i for i in input_vars.keys()]
+    node_weight_map = {}
+    for node in script_module.graph.nodes():
+        if node.kind() == "prim::GetAttr":
+            attribute_names = node.attributeNames()
+            assert(len(attribute_names) == 1)
+            attr_name = node.s(attribute_names[0])
+            node_arg = node.input().debugName()
+            node_name = node.output().debugName()
+            if node_arg in input_names:
+                node_weight_map[node_name] = attr_name
+            else:
+                previous_map = node_weight_map[node_arg]
+                node_weight_map[node_name] = previous_map + "." + attr_name
+            if attr_name in param_names:
+                value = state_dict[node_weight_map[node_name]]
+                tensor = tvm.nd.array(value.cpu().numpy())
+                shape = tensor.shape
+                param_tensors[node_name] = tensor
+                params[node_name] = _expr.var(node_name,
+                                              shape=shape)
+    return params, param_tensors
+
+
+def parse_script_module(script_module, input_shapes):
     consts = {}
     ops = {}
     op_inputs_types = {}
-    node_name_to_nid = {}
 
-    def parse_inputs():
-        ir_inputs = [i for i in script_module.graph.inputs()]
-        ir_names = [i.debugName() for i in ir_inputs]
-
-        for input_name, ir_input in zip(input_shapes, ir_inputs[1:]):
-            input_shape = input_shapes[input_name]
-            ir_input.setDebugName(input_name)
-            input_var = _expr.var(input_name,
-                                  shape=input_shapes[input_name])
-            input_vars[input_name] = input_var  # X: (1, 3, 224, 224)
-
-        # Add self (first input of a PyTorch graph) to inputs
-        input_shape = [3]
-        tensor = tvm.nd.array(np.zeros(input_shape).astype(np.float32))
-        input_name = ir_names[0]  # self.1
-        input_vars[input_name] = tensor
-
-    def parse_params():
-        state_dict = script_module.state_dict()
-        param_names = set()
-        for key, value in state_dict.items():
-            param_str = str(key)
-            param_name = param_str.split('.')[-1]
-            param_names.add(param_name)
-
-        input_names = [i for i in input_vars.keys()]
-        node_weight_map = {}
-        for node in script_module.graph.nodes():
-            if node.kind() == "prim::GetAttr":
-                attribute_names = node.attributeNames()
-                assert(len(attribute_names) == 1)
-                attr_name = node.s(attribute_names[0])
-                node_arg = node.input().debugName()
-                node_name = node.output().debugName()
-                if node_arg in input_names:
-                    node_weight_map[node_name] = attr_name
-                else:
-                    previous_map = node_weight_map[node_arg]
-                    node_weight_map[node_name] = previous_map + "." + attr_name
-                if attr_name in param_names:
-                    value = state_dict[node_weight_map[node_name]]
-                    tensor = tvm.nd.array(value.cpu().numpy())
-                    shape = tensor.shape
-                    param_tensors[node_name] = tensor
-                    params[node_name] = _expr.var(node_name,
-                                                  shape=shape)
+    input_vars = parse_inputs(script_module, input_shapes)
+    params, param_tensors = parse_params(script_module, input_vars)
 
     def parse_ops():
         # Traverse nodes and add to graph
@@ -907,11 +914,10 @@ def parse_script_module(script_module, input_shapes):
 
         op_inputs_types[node_id] = input_list_types
 
-    parse_inputs()
-    parse_params()
     parse_ops()
 
     outputs = []
+    node_name_to_nid = {}
     for k, v in {**input_vars, **params}.items():
         node_name_to_nid[k] = len(outputs)
         outputs.append(v)
