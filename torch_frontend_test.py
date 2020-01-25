@@ -920,6 +920,13 @@ def parse_script_module(script_module, input_shapes):
     consts, ops, op_in_types, list_vars = parse_ops(script_module, input_vars)
     input_vars.update(list_vars)
 
+    def get_inputs(op_node, outputs, name_map):
+        inputs = []
+        for i in op_node.inputs():
+            inode_name = name_map[i.debugName()]
+            inputs.append(outputs[inode_name])
+        return inputs
+
     outputs = []
     node_name_to_nid = {}
     for k, v in {**input_vars, **param_vars}.items():
@@ -936,13 +943,8 @@ def parse_script_module(script_module, input_shapes):
             outputs.append(consts[node_name])
         else:
             node_name_to_nid[node_name] = len(outputs)
-            op_inputs = []
-            for i in op_node.inputs():
-                inode_name = node_name_to_nid[i.debugName()]
-                op_inputs.append(outputs[inode_name])
-
-            call = convert_map[operator](op_inputs,
-                                         op_in_types[node_name])
+            inputs = get_inputs(op_node, outputs, node_name_to_nid)
+            call = convert_map[operator](inputs, op_in_types[node_name])
             outputs.append(call)
 
     body = outputs[-1]
