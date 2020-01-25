@@ -3,7 +3,7 @@ import tvm
 import numpy as np
 from tvm import relay
 from tvm.relay import expr as _expr
-from tvm.relay.frontend.common import infer_shape, infer_value
+from tvm.relay.frontend.common import infer_shape
 
 
 class QuantParam:
@@ -19,10 +19,9 @@ class QuantVar:
         param_prefix = qparam.param_key[:-len("._packed_params")]
         self.weight = _expr.var(param_prefix + "_weight",
                                 shape=qparam.weight.shape)
-        self.scales = _expr.var(param_prefix + "_scales",
-                                shape=qparam.scales.shape)
+        self.scales = _expr.var(param_prefix + "_scales")
         self.zero_points = _expr.var(param_prefix + "_zero_points",
-                                     shape=qparam.zero_points.shape)
+                                     dtype="int32")
 
 
 def unpack_quant_params(param_name, packed_params):
@@ -34,11 +33,13 @@ def unpack_quant_params(param_name, packed_params):
     weight = qweight.dequantize().numpy()
     if qweight.qscheme() == torch.per_tensor_affine:
         scale = np.array([qweight.q_scale()])
-        zero_point = np.array([qweight.q_zero_point()])
+        zero_point = np.array([qweight.q_zero_point()], dtype="int32")
+        # scale = qweight.q_scale()
+        # zero_point = int(qweight.q_zero_point())
         param = QuantParam(weight, scale, zero_point, param_name)
     else:
         scales = qweight.q_per_channel_scales().numpy()
-        zero_points = qweight.q_per_channel_zero_points().numpy()
+        zero_points = qweight.q_per_channel_zero_points().numpy().astype("int32")
         param = QuantParam(weight, scales, zero_points, param_name)
 
     return param
@@ -55,7 +56,7 @@ def get_weight_quant_params(state_dict):
 def get_input_quant_param(state_dict):
     input_scale = state_dict["quant.scale"]
     input_zero_point = state_dict["quant.zero_point"]
-    return 1.0 / float(input_scale[0]), float(input_zero_point[0])
+    return 1.0 / float(input_scale[0]), int(input_zero_point[0])
 
 
 def get_quant_param_vars(quant_params):
@@ -95,7 +96,8 @@ def add_quant_params(params, quant_param_vars, quant_params):
 
 def _quantize_per_tensor():
     def _impl(inputs, input_type):
-        return relay.qnn.op.quantize(inputs[0], _expr.const(inputs[1]), _expr.const(inputs[2]), out_dtype="uint8")
+        return relay.qnn.op.quantize(inputs[0], _expr.const(inputs[1]),
+                                     _expr.const(inputs[2]), out_dtype="uint8")
     return _impl
 
 
@@ -136,6 +138,7 @@ def _quantized_conv2d(with_relu=False):
         input_zero_point = inputs[9]
 
         print("input_scale, input_zero_point:", input_scale, input_zero_point)
+        print("weight_scale, weight_zero_point:", weight_scale, weight_zero_point)
 
         conv_out = relay.qnn.op.conv2d(inputs[0], weight,
                                        input_zero_point, weight_zero_point,
@@ -145,7 +148,6 @@ def _quantized_conv2d(with_relu=False):
                                               input_scale, input_zero_point,
                                               output_scale, output_zero_point,
                                               out_dtype="uint8")
-
         if with_relu:
             return relay.nn.relu(requantized)
 
@@ -155,8 +157,8 @@ def _quantized_conv2d(with_relu=False):
 
 
 convert_map = {
-    'aten::quantize_per_tensor' : _quantize_per_tensor(),
-    'quantized::conv2d_relu' : _quantized_conv2d(True),
-    'aten::dequantize' : _dequantize(),
-    'quantized::conv2d' : _quantized_conv2d(),
+    'aten::quantize_per_tensor': _quantize_per_tensor(),
+    'quantized::conv2d_relu': _quantized_conv2d(True),
+    'aten::dequantize': _dequantize(),
+    'quantized::conv2d': _quantized_conv2d(),
 }

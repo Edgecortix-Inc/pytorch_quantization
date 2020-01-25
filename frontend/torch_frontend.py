@@ -165,7 +165,6 @@ def get_op_inputs(op_node, outputs, name_map):
     for i in op_node.inputs():
         inode_name = name_map[i.debugName()]
         inputs.append(outputs[inode_name])
-        print("Added ", i.debugName(), " to ", op_node.kind())
     return inputs
 
 
@@ -197,7 +196,6 @@ def parse_script_module(script_module, input_shapes):
 
     for node_name, op_node in ops.items():
         operator = op_node.kind()
-        print("operator:", operator)
         if operator == "prim::Constant":
             node_name_to_nid[node_name] = len(outputs)
             outputs.append(consts[node_name])
@@ -211,8 +209,8 @@ def parse_script_module(script_module, input_shapes):
             outputs.append(call)
 
     body = outputs[-1]
-    print(body)
     func = tvm.relay.Function(_analysis.free_vars(body), body)
+    print(func)
     param = {k: tvm.nd.array(v) for k, v in param_tensors.items()}
 
     if quantized:
