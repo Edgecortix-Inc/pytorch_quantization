@@ -798,7 +798,7 @@ def parse_script_module(script_module, input_shapes):
     consts = {}
     ops = {}
     op_inputs_types = {}
-    nid_to_node_name = {}
+    node_name_to_nid = {}
 
     def parse_inputs():
         ir_inputs = [i for i in script_module.graph.inputs()]
@@ -915,29 +915,28 @@ def parse_script_module(script_module, input_shapes):
 
     outputs = []
     for k, v in {**inputs_r, **params}.items():
-        nid_to_node_name[k] = len(outputs)
+        node_name_to_nid[k] = len(outputs)
         outputs.append(v)
 
-    nid = len(outputs)
-    for node_id, op_node in ops.items():
+    for node_name, op_node in ops.items():
         operator = op_node.kind()
-        node_name = op_node.output().debugName()
+
         if operator == 'prim::ListConstruct':
-            outputs.append(outputs[nid_to_node_name[node_name]])
+            nid = node_name_to_nid[node_name]
+            outputs.append(outputs[nid])
         elif operator == "prim::Constant":
+            node_name_to_nid[node_name] = len(outputs)
             outputs.append(consts[node_name])
         else:
+            node_name_to_nid[node_name] = len(outputs)
             op_inputs = []
             for ind, i in enumerate(op_node.inputs()):
-                inode_id = nid_to_node_name[i.debugName()]
-                op_inputs.append(outputs[inode_id])
+                inode_name = node_name_to_nid[i.debugName()]
+                op_inputs.append(outputs[inode_name])
 
             call = convert_map[operator](op_inputs,
-                                         op_inputs_types[node_id])
+                                         op_inputs_types[node_name])
             outputs.append(call)
-
-        nid_to_node_name[node_id] = nid
-        nid += 1
 
     body = outputs[-1]
     func = tvm.relay.Function(_analysis.free_vars(body), body)
