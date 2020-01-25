@@ -421,14 +421,10 @@ def parse_script_module(script_module, input_shapes):
                     for cnt in range(0, len(op_inputs_r[node_id])):
                         if isinstance(op_inputs_r[node_id][cnt], str):
                             if "call/var" in op_inputs_r[node_id][cnt]:
-                                print("len(op_inputs_r[node_id]) =", len(op_inputs_r[node_id]))
-                                print("cnt =", cnt)
-                                print("inode %s, nid_to_node_name[inode] =" % inode, nid_to_node_name[inode])
-                                print("len(outputs) =", len(outputs))
                                 op_inputs_r[node_id][cnt] = \
                                     outputs[nid_to_node_name[inode]]
                                 break
-            print("inputs to %s" % operator, op_inputs_r[node_id])
+            # print("inputs to %s" % operator, op_inputs_r[node_id])
             call = convert_map[operator](op_inputs_r[node_id],
                                          op_inputs_types[node_id])
             outputs.append(call)
