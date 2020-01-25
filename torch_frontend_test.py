@@ -911,20 +911,21 @@ def parse_ops(script_module, input_vars):
     return consts, ops, op_inputs_types, list_input_vars
 
 
+def get_op_inputs(op_node, outputs, name_map):
+    inputs = []
+    for i in op_node.inputs():
+        inode_name = name_map[i.debugName()]
+        inputs.append(outputs[inode_name])
+    return inputs
+
+
 def parse_script_module(script_module, input_shapes):
     input_vars = parse_inputs(script_module, input_shapes)
     param_vars, param_tensors = parse_params(script_module, input_vars)
     consts, ops, op_in_types, list_vars = parse_ops(script_module, input_vars)
+
     input_vars.update(param_vars)
     input_vars.update(list_vars)
-
-    def get_op_inputs(op_node, outputs, name_map):
-        inputs = []
-        for i in op_node.inputs():
-            inode_name = name_map[i.debugName()]
-            inputs.append(outputs[inode_name])
-        return inputs
-
     outputs = list(input_vars.values())
     node_name_to_nid = dict(zip(input_vars.keys(), range(len(outputs))))
 
