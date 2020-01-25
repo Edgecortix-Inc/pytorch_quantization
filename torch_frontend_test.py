@@ -31,6 +31,21 @@ def parse_inputs(script_module, input_shapes):
     return input_vars
 
 
+def getattr_property(node):
+    attribute_names = node.attributeNames()
+    assert(len(attribute_names) == 1)
+    attr_name = node.s(attribute_names[0])
+    node_arg = node.input().debugName()
+    node_name = node.output().debugName()
+    return node_name, attr_name, node_arg
+
+
+def get_param_and_var(torch_tensor, name):
+    tensor = tvm.nd.array(torch_tensor.cpu().numpy())
+    var = _expr.var(name, shape=tensor.shape)
+    return tensor, var
+
+
 def parse_params(script_module, input_names):
     params = {}
     param_tensors = {}
@@ -41,34 +56,32 @@ def parse_params(script_module, input_names):
         param_name = param_str.split('.')[-1]
         param_names.add(param_name)
 
+    def update_attr_name(prev_map, node_arg, attr_name):
+        if node_arg in input_names:
+            return attr_name
+        else:
+            return prev_map[node_arg] + "." + attr_name
+
     node_weight_map = {}
     packed_param_name_map = {}
     for node in script_module.graph.nodes():
         if node.kind() == "prim::GetAttr":
-            attribute_names = node.attributeNames()
-            assert(len(attribute_names) == 1)
-            attr_name = node.s(attribute_names[0])
-            node_arg = node.input().debugName()
-            node_name = node.output().debugName()
-            if node_arg in input_names:
-                node_weight_map[node_name] = attr_name
-            else:
-                previous_map = node_weight_map[node_arg]
-                node_weight_map[node_name] = previous_map + "." + attr_name
+            node_name, attr_name, node_arg = getattr_property(node)
+            node_weight_map[node_name] = update_attr_name(node_weight_map,
+                                                          node_arg, attr_name)
             if attr_name in param_names:
-                key = node_weight_map[node_name]
-                # TODO: fix for fc
-                if key == "fc._packed_params":
-                    key += "._packed_params"
-                value = state_dict[key]
+                full_attr = node_weight_map[node_name]
 
                 if attr_name == "_packed_params":
-                    packed_param_name_map[node_name] = key
+                    # TODO: fix for fc
+                    if key == "fc._packed_params":
+                        key += "._packed_params"
+                    packed_param_name_map[node_name] = full_attr
                 else:
-                    tensor = tvm.nd.array(value.cpu().numpy())
-                    param_tensors[node_name] = tensor
-                    params[node_name] = _expr.var(node_name,
-                                                  shape=tensor.shape)
+                    param, var = get_param_and_var(state_dict[full_attr], node_name)
+                    param_tensors[node_name] = param
+                    params[node_name] = var
+
     return params, param_tensors, packed_param_name_map
 
 
@@ -84,7 +97,8 @@ def get_input_types(op_node):
                 input_list_types.append(in_ty.scalarType().lower())
         elif input_node_kind == 'ListType':
             input_list_types.append(str(in_ty.getElementType()).lower())
-        elif input_node_kind in ['IntType', 'FloatType', 'BoolType', 'StringType', 'OptionalType']:
+        elif input_node_kind in ['IntType', 'FloatType', 'BoolType',
+                                 'StringType', 'OptionalType']:
             input_list_types.append(str(in_ty).lower())
         else:
             input_list_types.append('UnsupportedType')
