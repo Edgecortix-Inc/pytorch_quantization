@@ -791,7 +791,7 @@ convert_map = {
 
 
 def parse_script_module(script_module, input_shapes):
-    inputs_r = {}
+    input_vars = {}
     params = {}
     param_tensors = {}
     consts = {}
@@ -808,13 +808,13 @@ def parse_script_module(script_module, input_shapes):
             ir_input.setDebugName(input_name)
             input_var = _expr.var(input_name,
                                   shape=input_shapes[input_name])
-            inputs_r[input_name] = input_var # X: (1, 3, 224, 224)
+            input_vars[input_name] = input_var  # X: (1, 3, 224, 224)
 
         # Add self (first input of a PyTorch graph) to inputs
         input_shape = [3]
         tensor = tvm.nd.array(np.zeros(input_shape).astype(np.float32))
-        input_name = ir_names[0] # self.1
-        inputs_r[input_name] = tensor
+        input_name = ir_names[0]  # self.1
+        input_vars[input_name] = tensor
 
     def parse_params():
         state_dict = script_module.state_dict()
@@ -824,7 +824,7 @@ def parse_script_module(script_module, input_shapes):
             param_name = param_str.split('.')[-1]
             param_names.add(param_name)
 
-        input_names = [i for i in inputs_r.keys()]
+        input_names = [i for i in input_vars.keys()]
         node_weight_map = {}
         for node in script_module.graph.nodes():
             if node.kind() == "prim::GetAttr":
@@ -864,21 +864,21 @@ def parse_script_module(script_module, input_shapes):
                         consts[node_name] = node.t(attr_name)
                     else:
                         print(ty)
-                        assert False # TODO: handle other types
+                        assert False  # TODO: handle other types
                 else:
                     assert num_attributes == 0
                     consts[node_name] = None
             elif node.kind() == "prim::ListConstruct":
                 list_shape = []
                 for input_node in node.inputs():
-                    if input_node.debugName() in inputs_r.keys():
+                    if input_node.debugName() in input_vars.keys():
                         # TODO
                         assert False
                     elif input_node.debugName() in consts.keys():
                         c = consts[input_node.debugName()]
                         assert(isinstance(c, int))
                         list_shape.append(c)
-                inputs_r[node_name] = _expr.var(node_name, shape=list_shape)
+                input_vars[node_name] = _expr.var(node_name, shape=list_shape)
 
             if node.kind() != "prim::GetAttr":
                 add_op(node_name, node)
@@ -912,7 +912,7 @@ def parse_script_module(script_module, input_shapes):
     parse_ops()
 
     outputs = []
-    for k, v in {**inputs_r, **params}.items():
+    for k, v in {**input_vars, **params}.items():
         node_name_to_nid[k] = len(outputs)
         outputs.append(v)
 
@@ -927,7 +927,7 @@ def parse_script_module(script_module, input_shapes):
         else:
             node_name_to_nid[node_name] = len(outputs)
             op_inputs = []
-            for ind, i in enumerate(op_node.inputs()):
+            for i in op_node.inputs():
                 inode_name = node_name_to_nid[i.debugName()]
                 op_inputs.append(outputs[inode_name])
 
