@@ -830,15 +830,15 @@ def parse_script_module(script_module, input_shapes):
             if node.kind() == "prim::GetAttr":
                 attribute_names = node.attributeNames()
                 assert(len(attribute_names) == 1)
-                node_getattr_name = node.s(attribute_names[0])
+                attr_name = node.s(attribute_names[0])
                 node_arg = node.input().debugName()
                 node_name = node.output().debugName()
                 if node_arg in input_names:
-                    node_weight_map[node_name] = node_getattr_name
+                    node_weight_map[node_name] = attr_name
                 else:
-                    previous_map = node_weight_map[node_arg[:]]
-                    node_weight_map[node_name] = previous_map + "." +node_getattr_name
-                if node_getattr_name in param_names:
+                    previous_map = node_weight_map[node_arg]
+                    node_weight_map[node_name] = previous_map + "." + attr_name
+                if attr_name in param_names:
                     value = state_dict[node_weight_map[node_name]]
                     tensor = tvm.nd.array(value.cpu().numpy())
                     shape = tensor.shape
@@ -851,8 +851,9 @@ def parse_script_module(script_module, input_shapes):
         for node in script_module.graph.nodes():
             node_name = node.output().debugName()
             attribute_names = node.attributeNames()
+            num_attributes = len(attribute_names)
             if node.kind() == "prim::Constant":
-                if len(attribute_names) == 1:
+                if num_attributes == 1:
                     attr_name = attribute_names[0]
                     ty = node.output().type().kind()
                     if ty == "IntType" or ty == "BoolType":
@@ -865,6 +866,7 @@ def parse_script_module(script_module, input_shapes):
                         print(ty)
                         assert False # TODO: handle other types
                 else:
+                    assert num_attributes == 0
                     consts[node_name] = None
             elif node.kind() == "prim::ListConstruct":
                 list_shape = []
@@ -877,32 +879,27 @@ def parse_script_module(script_module, input_shapes):
                         assert(isinstance(c, int))
                         list_shape.append(c)
                 inputs_r[node_name] = _expr.var(node_name, shape=list_shape)
-            elif node.kind() == "prim::GetAttr":
-                continue
 
-            add_op(node_name, node)
+            if node.kind() != "prim::GetAttr":
+                add_op(node_name, node)
 
     def add_op(node_id, op_node):
         ops[node_id] = op_node
         input_list_types = []
         for input_node in op_node.inputs():
-            try:
-                input_node_kind = input_node.type().kind()
-                if input_node_kind == 'TensorType':
-                    if input_node.type().scalarType() is None:
-                        input_list_types.append('float')
-                    else:
-                        input_list_types.append(input_node.type().scalarType().lower())
-                elif input_node_kind == 'ListType':
-                    input_list_types.append(str(input_node.type().getElementType()).lower())
-                elif input_node_kind == 'IntType' or input_node_kind == 'FloatType' or \
-                        input_node_kind == 'BoolType' or input_node_kind == 'StringType' or \
-                        input_node_kind == 'OptionalType':
-                    input_list_types.append(str(input_node.type()).lower())
+            in_ty = input_node.type()
+            input_node_kind = in_ty.kind()
+            if input_node_kind == 'TensorType':
+                if in_ty.scalarType() is None:
+                    input_list_types.append('float')
                 else:
-                    input_list_types.append('UnsupportedType')
-            except Exception as e:
-                print('Internal PyTorch error. Failed to grab type.')
+                    input_list_types.append(in_ty.scalarType().lower())
+            elif input_node_kind == 'ListType':
+                input_list_types.append(str(in_ty.getElementType()).lower())
+            elif input_node_kind in ['IntType', 'FloatType', 'BoolType', 'StringType', 'OptionalType']:
+                input_list_types.append(str(in_ty).lower())
+            else:
+                input_list_types.append('UnsupportedType')
 
         node_type = op_node.output().type()
         if op_node.kind() in ['aten::ones', 'aten::zeros']:
