@@ -19,9 +19,9 @@ class QuantVar:
         param_prefix = qparam.param_key[:-len("._packed_params")]
         self.weight = _expr.var(param_prefix + "_weight",
                                 shape=qparam.weight.shape)
-        self.scales = _expr.var(param_prefix + "_scales")
-        self.zero_points = _expr.var(param_prefix + "_zero_points",
-                                     dtype="int32")
+        self.scales = _expr.const(np.asscalar(qparam.scales))
+        self.zero_points = _expr.const(np.asscalar(qparam.zero_points),
+                                       dtype="int32")
 
 
 def unpack_quant_params(param_name, packed_params):
@@ -90,14 +90,13 @@ def add_quant_params(params, quant_param_vars, quant_params):
         assert k in quant_param_vars
         qvar = quant_param_vars[k]
         params[qvar.weight.name_hint] = tvm.nd.array(v.weight)
-        params[qvar.scales.name_hint] = tvm.nd.array(v.scales)
-        params[qvar.zero_points.name_hint] = tvm.nd.array(v.zero_points)
 
 
 def _quantize_per_tensor():
     def _impl(inputs, input_type):
         return relay.qnn.op.quantize(inputs[0], _expr.const(inputs[1]),
-                                     _expr.const(inputs[2]), out_dtype="uint8")
+                                     _expr.const(inputs[2]), out_dtype="uint8",
+                                     axis=1)
     return _impl
 
 
@@ -147,7 +146,8 @@ def _quantized_conv2d(with_relu=False):
         requantized = relay.qnn.op.requantize(conv_out,
                                               input_scale, input_zero_point,
                                               output_scale, output_zero_point,
-                                              out_dtype="uint8")
+                                              out_dtype="uint8",
+                                              axis=1)
         if with_relu:
             return relay.nn.relu(requantized)
 
