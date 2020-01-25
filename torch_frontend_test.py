@@ -798,10 +798,8 @@ def parse_inputs(script_module, input_shapes):
     for input_name, ir_input in zip(input_shapes, ir_inputs[1:]):
         input_shape = input_shapes[input_name]
         ir_input.setDebugName(input_name)
-        input_var = _expr.var(input_name,
-                              shape=input_shapes[input_name])
-        input_vars[input_name] = input_var  # X: (1, 3, 224, 224)
-
+        input_vars[input_name] = _expr.var(input_name,
+                                           shape=input_shapes[input_name])
     # Add self (first input of a PyTorch graph) to inputs
     input_shape = [3]
     tensor = tvm.nd.array(np.zeros(input_shape).astype(np.float32))
@@ -838,10 +836,9 @@ def parse_params(script_module, input_vars):
             if attr_name in param_names:
                 value = state_dict[node_weight_map[node_name]]
                 tensor = tvm.nd.array(value.cpu().numpy())
-                shape = tensor.shape
                 param_tensors[node_name] = tensor
                 params[node_name] = _expr.var(node_name,
-                                              shape=shape)
+                                              shape=tensor.shape)
     return params, param_tensors
 
 
@@ -918,6 +915,7 @@ def parse_script_module(script_module, input_shapes):
     input_vars = parse_inputs(script_module, input_shapes)
     param_vars, param_tensors = parse_params(script_module, input_vars)
     consts, ops, op_in_types, list_vars = parse_ops(script_module, input_vars)
+    input_vars.update(param_vars)
     input_vars.update(list_vars)
 
     def get_op_inputs(op_node, outputs, name_map):
@@ -927,11 +925,8 @@ def parse_script_module(script_module, input_shapes):
             inputs.append(outputs[inode_name])
         return inputs
 
-    outputs = []
-    node_name_to_nid = {}
-    for k, v in {**input_vars, **param_vars}.items():
-        node_name_to_nid[k] = len(outputs)
-        outputs.append(v)
+    outputs = list(input_vars.values())
+    node_name_to_nid = dict(zip(input_vars.keys(), range(len(outputs))))
 
     for node_name, op_node in ops.items():
         operator = op_node.kind()
