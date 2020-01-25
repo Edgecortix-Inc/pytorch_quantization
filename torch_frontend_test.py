@@ -12,7 +12,6 @@ import qnn_torch
 from relay_conversion import convert_map
 
 
-
 def parse_inputs(script_module, input_shapes):
     ir_inputs = [i for i in script_module.graph.inputs()]
     ir_names = [i.debugName() for i in ir_inputs]
@@ -32,7 +31,7 @@ def parse_inputs(script_module, input_shapes):
     return input_vars
 
 
-def parse_params(script_module, input_vars):
+def parse_params(script_module, input_names):
     params = {}
     param_tensors = {}
     state_dict = script_module.state_dict()
@@ -42,7 +41,6 @@ def parse_params(script_module, input_vars):
         param_name = param_str.split('.')[-1]
         param_names.add(param_name)
 
-    input_names = [i for i in input_vars.keys()]
     node_weight_map = {}
     packed_param_name_map = {}
     for node in script_module.graph.nodes():
@@ -153,15 +151,18 @@ def get_op_inputs(op_node, outputs, name_map):
 
 def parse_script_module(script_module, input_shapes):
     input_vars = parse_inputs(script_module, input_shapes)
-    param_vars, param_tensors, packed_param_name_map = \
-      parse_params(script_module, input_vars)
+    input_names = input_vars.keys()
+    param_vars, param_tensors, packed_param_map = parse_params(script_module,
+                                                               input_names)
     consts, ops, op_in_types, list_vars = parse_ops(script_module, input_vars)
 
     quantized = False
-    if packed_param_name_map:
+    if packed_param_map:
         quantized = True
-        quant_params, quant_param_vars, input_scale, input_zero_point = \
-          qnn_torch.parse_quant_param(script_module)
+        params = script_module.state_dict()
+        weight_quant_params = qnn_torch.get_weight_quant_param(params)
+        quant_param_vars = qnn_torch.get_quant_param_vars(weight_quant_params)
+        input_scale, input_zero_point = qnn_torch.get_input_quant_param(params)
 
     input_vars.update(param_vars)
     input_vars.update(list_vars)
@@ -184,12 +185,7 @@ def parse_script_module(script_module, input_shapes):
     param = {k: tvm.nd.array(v) for k, v in param_tensors.items()}
 
     if quantized:
-        for (k, v) in quant_params.items():
-            assert k in quant_param_vars
-            qvar = quant_param_vars[k]
-            param[qvar.weight.name_hint] = tvm.nd.array(v.weight)
-            param[qvar.scales.name_hint] = tvm.nd.array(v.scales)
-            param[qvar.zero_points.name_hint] = tvm.nd.array(v.zero_points)
+        qnn_torch.add_quant_params(param, weight_quant_params, quant_param_vars)
 
     return _module.Module.from_expr(func), param
 
