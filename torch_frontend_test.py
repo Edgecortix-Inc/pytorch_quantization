@@ -96,7 +96,40 @@ def get_input_types(op_node):
     return input_list_types
 
 
-def parse_ops(script_module, input_vars):
+def get_constant(node):
+    attribute_names = node.attributeNames()
+    num_attributes = len(attribute_names)
+    if num_attributes == 1:
+        attr_name = attribute_names[0]
+        ty = node.output().type().kind()
+        if ty == "IntType" or ty == "BoolType":
+            return node.i(attr_name)
+        elif ty == "FloatType":
+            return node.f(attr_name)
+        elif ty == "TensorType":
+            return node.t(attr_name)
+        else:
+            print(ty)
+            assert False  # TODO: handle other types
+    else:
+        assert num_attributes == 0
+        return None
+
+
+def get_list_shape(node, input_names, consts):
+    list_shape = []
+    for input_node in node.inputs():
+        if input_node.debugName() in input_names:
+            # TODO
+            assert False
+        elif input_node.debugName() in consts.keys():
+            c = consts[input_node.debugName()]
+            assert(isinstance(c, int))
+            list_shape.append(c)
+    return list_shape
+
+
+def parse_ops(script_module, input_names):
     ops = {}
     op_inputs_types = {}
     consts = {}
@@ -104,34 +137,10 @@ def parse_ops(script_module, input_vars):
     # Traverse nodes and add to graph
     for node in script_module.graph.nodes():
         node_name = node.output().debugName()
-        attribute_names = node.attributeNames()
-        num_attributes = len(attribute_names)
         if node.kind() == "prim::Constant":
-            if num_attributes == 1:
-                attr_name = attribute_names[0]
-                ty = node.output().type().kind()
-                if ty == "IntType" or ty == "BoolType":
-                    consts[node_name] = node.i(attr_name)
-                elif ty == "FloatType":
-                    consts[node_name] = node.f(attr_name)
-                elif ty == "TensorType":
-                    consts[node_name] = node.t(attr_name)
-                else:
-                    print(ty)
-                    assert False  # TODO: handle other types
-            else:
-                assert num_attributes == 0
-                consts[node_name] = None
+            consts[node_name] = get_constant(node)
         elif node.kind() == "prim::ListConstruct":
-            list_shape = []
-            for input_node in node.inputs():
-                if input_node.debugName() in input_vars.keys():
-                    # TODO
-                    assert False
-                elif input_node.debugName() in consts.keys():
-                    c = consts[input_node.debugName()]
-                    assert(isinstance(c, int))
-                    list_shape.append(c)
+            list_shape = get_list_shape(node, input_names, consts)
             list_input_vars[node_name] = _expr.var(node_name, shape=list_shape)
 
         if node.kind() != "prim::GetAttr":
@@ -154,7 +163,7 @@ def parse_script_module(script_module, input_shapes):
     input_names = input_vars.keys()
     param_vars, param_tensors, packed_param_map = parse_params(script_module,
                                                                input_names)
-    consts, ops, op_in_types, list_vars = parse_ops(script_module, input_vars)
+    consts, ops, op_in_types, list_vars = parse_ops(script_module, input_names)
 
     quantized = False
     if packed_param_map:
