@@ -845,50 +845,9 @@ def parse_params(script_module, input_vars):
     return params, param_tensors
 
 
-def parse_script_module(script_module, input_shapes):
-    consts = {}
+def parse_ops(script_module, input_vars):
     ops = {}
     op_inputs_types = {}
-
-    input_vars = parse_inputs(script_module, input_shapes)
-    params, param_tensors = parse_params(script_module, input_vars)
-
-    def parse_ops():
-        # Traverse nodes and add to graph
-        for node in script_module.graph.nodes():
-            node_name = node.output().debugName()
-            attribute_names = node.attributeNames()
-            num_attributes = len(attribute_names)
-            if node.kind() == "prim::Constant":
-                if num_attributes == 1:
-                    attr_name = attribute_names[0]
-                    ty = node.output().type().kind()
-                    if ty == "IntType" or ty == "BoolType":
-                        consts[node_name] = node.i(attr_name)
-                    elif ty == "FloatType":
-                        consts[node_name] = node.f(attr_name)
-                    elif ty == "TensorType":
-                        consts[node_name] = node.t(attr_name)
-                    else:
-                        print(ty)
-                        assert False  # TODO: handle other types
-                else:
-                    assert num_attributes == 0
-                    consts[node_name] = None
-            elif node.kind() == "prim::ListConstruct":
-                list_shape = []
-                for input_node in node.inputs():
-                    if input_node.debugName() in input_vars.keys():
-                        # TODO
-                        assert False
-                    elif input_node.debugName() in consts.keys():
-                        c = consts[input_node.debugName()]
-                        assert(isinstance(c, int))
-                        list_shape.append(c)
-                input_vars[node_name] = _expr.var(node_name, shape=list_shape)
-
-            if node.kind() != "prim::GetAttr":
-                add_op(node_name, node)
 
     def add_op(node_id, op_node):
         ops[node_id] = op_node
@@ -914,7 +873,52 @@ def parse_script_module(script_module, input_shapes):
 
         op_inputs_types[node_id] = input_list_types
 
-    parse_ops()
+    consts = {}
+    list_input_vars = {}
+    # Traverse nodes and add to graph
+    for node in script_module.graph.nodes():
+        node_name = node.output().debugName()
+        attribute_names = node.attributeNames()
+        num_attributes = len(attribute_names)
+        if node.kind() == "prim::Constant":
+            if num_attributes == 1:
+                attr_name = attribute_names[0]
+                ty = node.output().type().kind()
+                if ty == "IntType" or ty == "BoolType":
+                    consts[node_name] = node.i(attr_name)
+                elif ty == "FloatType":
+                    consts[node_name] = node.f(attr_name)
+                elif ty == "TensorType":
+                    consts[node_name] = node.t(attr_name)
+                else:
+                    print(ty)
+                    assert False  # TODO: handle other types
+            else:
+                assert num_attributes == 0
+                consts[node_name] = None
+        elif node.kind() == "prim::ListConstruct":
+            list_shape = []
+            for input_node in node.inputs():
+                if input_node.debugName() in input_vars.keys():
+                    # TODO
+                    assert False
+                elif input_node.debugName() in consts.keys():
+                    c = consts[input_node.debugName()]
+                    assert(isinstance(c, int))
+                    list_shape.append(c)
+            list_input_vars[node_name] = _expr.var(node_name, shape=list_shape)
+
+        if node.kind() != "prim::GetAttr":
+            add_op(node_name, node)
+
+    return consts, ops, op_inputs_types, list_input_vars
+
+
+def parse_script_module(script_module, input_shapes):
+    input_vars = parse_inputs(script_module, input_shapes)
+    params, param_tensors = parse_params(script_module, input_vars)
+    consts, ops, op_inputs_types, list_inputs_vars = parse_ops(script_module, input_vars)
+    input_vars.update(list_inputs_vars)
 
     outputs = []
     node_name_to_nid = {}
