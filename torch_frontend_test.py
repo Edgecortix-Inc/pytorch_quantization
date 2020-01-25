@@ -146,6 +146,12 @@ def get_op_inputs(op_node, outputs, name_map):
     for i in op_node.inputs():
         inode_name = name_map[i.debugName()]
         inputs.append(outputs[inode_name])
+
+    if op_node.kind() == "quantized::conv2d_relu":
+        inputs.add(True)  # do relu
+    if op_node.kind() == "quantized::conv2d":
+        inputs.append(False)  # no relu
+
     return inputs
 
 
@@ -162,12 +168,15 @@ def parse_script_module(script_module, input_shapes):
         params = script_module.state_dict()
         weight_quant_params = qnn_torch.get_weight_quant_param(params)
         quant_param_vars = qnn_torch.get_quant_param_vars(weight_quant_params)
-        input_scale, input_zero_point = qnn_torch.get_input_quant_param(params)
 
     input_vars.update(param_vars)
     input_vars.update(list_vars)
     outputs = list(input_vars.values())
     node_name_to_nid = dict(zip(input_vars.keys(), range(len(outputs))))
+
+    if quantized:
+        qnn_torch.add_input_quant_params(outputs, node_name_to_nid,
+                                         packed_param_map, quant_param_vars)
 
     for node_name, op_node in ops.items():
         operator = op_node.kind()
@@ -185,7 +194,7 @@ def parse_script_module(script_module, input_shapes):
     param = {k: tvm.nd.array(v) for k, v in param_tensors.items()}
 
     if quantized:
-        qnn_torch.add_quant_params(param, weight_quant_params, quant_param_vars)
+        qnn_torch.add_quant_params(param, quant_param_vars, weight_quant_params)
 
     return _module.Module.from_expr(func), param
 

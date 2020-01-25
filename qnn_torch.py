@@ -32,7 +32,6 @@ def unpack_quant_params(param_name, packed_params, key):
         qweight, bias = torch.ops.quantized.conv2d_unpack(packed_params)
 
     weight = qweight.dequantize().numpy()
-
     if qweight.qscheme() == torch.per_tensor_affine:
         scale = np.array([qweight.q_scale()])
         zero_point = np.array([qweight.q_zero_point()])
@@ -43,12 +42,6 @@ def unpack_quant_params(param_name, packed_params, key):
         param = QuantParam(weight, scales, zero_points, key)
 
     return param
-
-
-def get_input_quant_param(state_dict):
-    input_scale = state_dict["quant.scale"]
-    input_zero_point = state_dict["quant.zero_point"]
-    return float(input_scale[0]), float(input_zero_point[0])
 
 
 def get_weight_quant_params(state_dict):
@@ -66,30 +59,17 @@ def get_quant_param_vars(quant_params):
     return quant_param_vars
 
 
-def add_quant_param(input_value, packed_param_nodes, quant_param_vars, input_scale, input_zero_point):
-    inode_id = input_value.debugName()
-    inode = input_value.node()
-    key = packed_param_nodes[inode_id]
-    qparam = quant_param_vars[key]
-    input_list_r = []
-    input_list_r.append(relay.qnn.op.quantize(qparam.weight,
-                                              qparam.scales,
-                                              qparam.zero_points,
-                                              out_dtype="uint8"))
-    input_list_r.append(quant_param_vars[key].scales)
-    input_list_r.append(quant_param_vars[key].zero_points)
-
-    needs_input_quant_param = ["aten::dequantize", "quantized::conv2d_relu", "quantized::conv2d"]
-    if inode.kind() in needs_input_quant_param:
-        input_list_r.append(relay.const(input_scale))
-        input_list_r.append(relay.const(input_zero_point))
-    if inode.kind() == "quantized::conv2d_relu":
-        input_list_r.append(True)  # do relu
-    if inode.kind() == "quantized::conv2d":
-        input_list_r.append(False)  # no relu
+def add_quant_params_to_outputs(outputs, name_map,
+                                packed_param_map, quant_param_vars):
+    for node_name, packed_param_name in packed_param_map.items():
+        qvar = quant_param_vars[packed_param_name]
+        name_map[node_name] = len(outputs)
+        qweight = relay.qnn.op.quantize(qvar.weight, qvar.scales,
+                                        qvar.zero_points, out_dtype="uint8")
+        outputs.append(_expr.Tuple(qweight, qvar.scales, qvar.zero_points))
 
 
-def add_quant_params(params, quant_params, quant_param_vars):
+def add_quant_params(params, quant_param_vars, quant_params):
     for (k, v) in quant_params.items():
         assert k in quant_param_vars
         qvar = quant_param_vars[k]
