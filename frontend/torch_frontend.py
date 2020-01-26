@@ -184,10 +184,10 @@ def parse_ops(nodes):
     return consts, ops, op_inputs_types, list_input_vars
 
 
-def get_op_inputs(op_node, outputs, name_map):
+def get_op_inputs(op_node, outputs, output_index_map):
     inputs = []
     for i in op_node.inputs():
-        inode_name = name_map[i.debugName()]
+        inode_name = output_index_map[i.debugName()]
         inputs.append(outputs[inode_name])
     return inputs
 
@@ -210,10 +210,10 @@ def parse_script_module(script_module, input_shapes):
     input_vars.update(param_vars)
     input_vars.update(list_vars)
     outputs = list(input_vars.values())
-    node_name_to_nid = dict(zip(input_vars.keys(), range(len(outputs))))
+    output_index_map = dict(zip(input_vars.keys(), range(len(outputs))))
 
     if quantized:
-        qnn_torch.add_quant_params_to_outputs(outputs, node_name_to_nid,
+        qnn_torch.add_quant_params_to_outputs(outputs, output_index_map,
                                               packed_param_map,
                                               weight_quant_params)
         convert_map.update(qnn_torch.convert_map)
@@ -221,11 +221,11 @@ def parse_script_module(script_module, input_shapes):
     for node_name, op_node in ops.items():
         operator = op_node.kind()
         if operator == "prim::Constant":
-            node_name_to_nid[node_name] = len(outputs)
+            output_index_map[node_name] = len(outputs)
             outputs.append(consts[node_name])
         elif operator != 'prim::ListConstruct':
-            node_name_to_nid[node_name] = len(outputs)
-            inputs = get_op_inputs(op_node, outputs, node_name_to_nid)
+            output_index_map[node_name] = len(outputs)
+            inputs = get_op_inputs(op_node, outputs, output_index_map)
             if quantized:
                 qnn_torch.add_input_quant_params(operator, inputs,
                                                  input_scale, input_zero_point)
