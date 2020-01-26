@@ -123,7 +123,7 @@ def _quantized_conv2d(with_relu=False):
         conv_out = relay.qnn.op.conv2d(inputs[0], weight,
                                        input_zero_point, weight_zero_point,
                                        input_scale, weight_scale,
-                                       padding=(1, 1))
+                                       padding=(1, 1), kernel_size=(3, 3))
 
         requantized = relay.qnn.op.requantize(conv_out,
                                               input_scale, input_zero_point,

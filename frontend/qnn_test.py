@@ -133,22 +133,16 @@ for raw_model in models:
     torch._C._jit_pass_inline(script_module.graph)
     mod, params = parse_script_module(script_module, input_shapes)
 
-    mod["main"] = bind_params_by_name(mod["main"], params)
-
     with torch.no_grad():
         pt_result = script_module(inp).numpy()
 
-    qnn_pass = transform.Sequential([transform.InferType(),
-                                     qnn.transform.Legalize(),
-                                     qnn.transform.CanonicalizeOps()])
-    print(qnn_pass(mod))
+    with relay.build_config(opt_level=3):
+        json, lib, param = relay.build(mod, target="llvm", params=params)
 
-    # with relay.build_config(opt_level=3):
-    #     json, lib, param = relay.build(mod, target="llvm", params=params)
-
-    # runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context("cpu", 0))
-    # runtime.set_input(**param)
-    # runtime.set_input("X", inp.numpy())
-    # runtime.run()
-    # tvm_result = runtime.get_output(0).asnumpy()
-    # np.allclose(tvm_result, pt_result)
+    runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context("cpu", 0))
+    runtime.set_input(**param)
+    runtime.set_input("X", inp.numpy())
+    runtime.run()
+    tvm_result = runtime.get_output(0).asnumpy()
+    np.allclose(tvm_result, pt_result)
+    print(np.max(np.abs(tvm_result - pt_result)))
