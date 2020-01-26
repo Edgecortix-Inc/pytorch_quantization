@@ -8,8 +8,7 @@ import qnn_torch
 from relay_conversion import convert_map
 
 
-def parse_inputs(script_module, input_shapes):
-    ir_inputs = [i for i in script_module.graph.inputs()]
+def parse_inputs(ir_inputs, input_shapes):
     ir_names = [i.debugName() for i in ir_inputs]
     input_vars = {}
 
@@ -42,41 +41,40 @@ def get_param_and_var(torch_tensor, name):
     return tensor, var
 
 
-def parse_params(script_module, input_names):
+def is_full_attr(getattr_node):
+    uses = getattr_node.output().uses()
+    kinds = [use.user.kind() for use in uses]
+    return len(kinds) > 0 and all([kind != "prim::GetAttr" for kind in kinds])
+
+
+def update_attr_name(prev_map, node_arg, attr_name, input_names):
+    if node_arg in input_names:
+        return attr_name
+    else:
+        return prev_map[node_arg] + "." + attr_name
+
+
+def parse_params(nodes, state_dict, input_names):
     params = {}
     param_tensors = {}
-    state_dict = script_module.state_dict()
-    param_names = set()
-    for key, value in state_dict.items():
-        param_str = str(key)
-        param_name = param_str.split('.')[-1]
-        param_names.add(param_name)
-
-    def update_attr_name(prev_map, node_arg, attr_name):
-        if node_arg in input_names:
-            return attr_name
-        else:
-            return prev_map[node_arg] + "." + attr_name
-
     node_weight_map = {}
     packed_param_name_map = {}
-    for node in script_module.graph.nodes():
-        if node.kind() == "prim::GetAttr":
-            node_name, attr_name, node_arg = getattr_property(node)
-            node_weight_map[node_name] = update_attr_name(node_weight_map,
-                                                          node_arg, attr_name)
-            if attr_name in param_names:
-                full_attr = node_weight_map[node_name]
+    getattr_nodes = filter(lambda node: node.kind() == "prim::GetAttr", nodes)
 
-                if attr_name == "_packed_params":
-                    # TODO: fix for fc
-                    if key == "fc._packed_params":
-                        key += "._packed_params"
-                    packed_param_name_map[node_name] = full_attr
-                else:
-                    param, var = get_param_and_var(state_dict[full_attr], node_name)
-                    param_tensors[node_name] = param
-                    params[node_name] = var
+    for node in getattr_nodes:
+        node_name, attr_name, node_arg = getattr_property(node)
+        new_attr_name = update_attr_name(node_weight_map, node_arg,
+                                         attr_name, input_names)
+        if not is_full_attr(node):
+            node_weight_map[node_name] = new_attr_name
+            continue
+
+        if attr_name == "_packed_params":
+            packed_param_name_map[node_name] = new_attr_name
+        else:
+            param, var = get_param_and_var(state_dict[new_attr_name], node_name)
+            param_tensors[node_name] = param
+            params[node_name] = var
 
     return params, param_tensors, packed_param_name_map
 
@@ -126,31 +124,28 @@ def get_constant(node):
         return None
 
 
-def get_list_shape(node, input_names, consts):
+def get_list_shape(node, consts):
     list_shape = []
     for input_node in node.inputs():
-        if input_node.debugName() in input_names:
-            # TODO
-            assert False
-        elif input_node.debugName() in consts.keys():
+        if input_node.debugName() in consts.keys():
             c = consts[input_node.debugName()]
-            assert(isinstance(c, int))
+            assert isinstance(c, int)
             list_shape.append(c)
     return list_shape
 
 
-def parse_ops(script_module, input_names):
+def parse_ops(nodes):
     ops = {}
     op_inputs_types = {}
     consts = {}
     list_input_vars = {}
     # Traverse nodes and add to graph
-    for node in script_module.graph.nodes():
+    for node in nodes:
         node_name = node.output().debugName()
         if node.kind() == "prim::Constant":
             consts[node_name] = get_constant(node)
         elif node.kind() == "prim::ListConstruct":
-            list_shape = get_list_shape(node, input_names, consts)
+            list_shape = get_list_shape(node, consts)
             list_input_vars[node_name] = _expr.var(node_name, shape=list_shape)
 
         if node.kind() != "prim::GetAttr":
@@ -169,15 +164,17 @@ def get_op_inputs(op_node, outputs, name_map):
 
 
 def parse_script_module(script_module, input_shapes):
-    input_vars = parse_inputs(script_module, input_shapes)
+    nodes = list(script_module.graph.nodes())
+    inputs = list(script_module.graph.inputs())
+    params = script_module.state_dict()
+    input_vars = parse_inputs(inputs, input_shapes)
     input_names = input_vars.keys()
-    param_vars, param_tensors, packed_param_map = parse_params(script_module,
+    param_vars, param_tensors, packed_param_map = parse_params(nodes, params,
                                                                input_names)
-    consts, ops, op_in_types, list_vars = parse_ops(script_module, input_names)
+    consts, ops, op_in_types, list_vars = parse_ops(nodes)
 
     quantized = len(packed_param_map) > 0
     if quantized:
-        params = script_module.state_dict()
         weight_quant_params = qnn_torch.get_weight_quant_params(params)
         input_scale, input_zero_point = qnn_torch.get_input_quant_param(params)
 

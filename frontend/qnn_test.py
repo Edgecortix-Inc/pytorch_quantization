@@ -125,6 +125,7 @@ input_shapes = {input_name: (1, 3, 224, 224)}
 models = [
     AnnotatedConvBnModel().eval(),
     # TwoLayerLinearModel().eval()
+    # qresnet.resnet18(pretrained=True).eval()
 ]
 
 for raw_model in models:
@@ -146,3 +147,11 @@ for raw_model in models:
     tvm_result = runtime.get_output(0).asnumpy()
     np.allclose(tvm_result, pt_result)
     print(np.max(np.abs(tvm_result - pt_result)))
+
+
+# raw_model = AnnotatedConvBnModel().eval()
+# quantize_model(raw_model, inp)
+# script_module = torch.jit.trace(raw_model, inp).eval()
+# torch._C._jit_pass_inline(script_module.graph)
+# nodes = list(script_module.graph.nodes())
+# getattr_nodes = [node for node in nodes if node.kind() == "prim::GetAttr"]
