@@ -73,14 +73,13 @@ def add_quant_params_to_outputs(outputs, name_map,
         name_map[node_name] = len(outputs)
         qweight = relay.qnn.op.quantize(qvar.weight, qvar.scales,
                                         qvar.zero_points, out_dtype="uint8")
-        outputs.append(_expr.Tuple((qweight, qvar.scales, qvar.zero_points)))
+        outputs.append((qweight, qvar.scales, qvar.zero_points))
 
 
 def add_input_quant_params(op_name, inputs, input_scale, input_zero_point):
     needs_input_quant_param = ["quantized::conv2d", "quantized::conv2d_relu",
                                "aten::dequantize"]
     if op_name in needs_input_quant_param:
-        print("adding input param to ", op_name)
         inputs.append(relay.const(input_scale))
         inputs.append(relay.const(input_zero_point))
 
@@ -126,9 +125,9 @@ def _quantized_conv2d(with_relu=False):
         groups = inputs[5]
         print(strides, padding, dilation, groups)
 
-        weight = _expr.TupleGetItem(inputs[1], 0)
-        weight_scale = _expr.TupleGetItem(inputs[1], 1)
-        weight_zero_point = _expr.TupleGetItem(inputs[1], 2)
+        weight = inputs[1][0]
+        weight_scale = inputs[1][1]
+        weight_zero_point = inputs[1][2]
 
         output_scale = _expr.const(inputs[6])
         output_zero_point = _expr.const(inputs[7])
@@ -141,7 +140,8 @@ def _quantized_conv2d(with_relu=False):
 
         conv_out = relay.qnn.op.conv2d(inputs[0], weight,
                                        input_zero_point, weight_zero_point,
-                                       input_scale, weight_scale)
+                                       input_scale, weight_scale,
+                                       padding=(1, 1))
 
         requantized = relay.qnn.op.requantize(conv_out,
                                               input_scale, input_zero_point,
