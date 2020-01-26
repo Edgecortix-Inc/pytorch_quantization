@@ -3,7 +3,6 @@ import tvm
 from tvm import relay
 from tvm.relay import qnn
 import tvm.relay.transform as transform
-from tvm.relay.build_module import bind_params_by_name
 import torch
 from torch import nn
 from torch.quantization import QuantStub, DeQuantStub, QuantWrapper
@@ -133,25 +132,35 @@ for raw_model in models:
     script_module = torch.jit.trace(raw_model, inp).eval()
     torch._C._jit_pass_inline(script_module.graph)
     mod, params = parse_script_module(script_module, input_shapes)
+    print(mod)
+    print(params.keys())
 
     with torch.no_grad():
         pt_result = script_module(inp).numpy()
 
     with relay.build_config(opt_level=3):
-        json, lib, param = relay.build(mod, target="llvm", params=params)
+        opt_mod, opt_params = relay.build_module.optimize(mod, "llvm", params)
+        print(opt_mod)
+        print(opt_params.keys())
+    #     json, lib, params = relay.build(mod, target="llvm", params=params)
 
-    runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context("cpu", 0))
-    runtime.set_input(**param)
-    runtime.set_input("X", inp.numpy())
-    runtime.run()
-    tvm_result = runtime.get_output(0).asnumpy()
-    np.allclose(tvm_result, pt_result)
-    print(np.max(np.abs(tvm_result - pt_result)))
-
+    # runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context("cpu", 0))
+    # runtime.set_input(**params)
+    # runtime.set_input("X", inp.numpy())
+    # runtime.run()
+    # tvm_result = runtime.get_output(0).asnumpy()
+    # np.allclose(tvm_result, pt_result)
+    # print(np.max(np.abs(tvm_result - pt_result)), np.mean(np.abs(tvm_result - pt_result)))
 
 # raw_model = AnnotatedConvBnModel().eval()
 # quantize_model(raw_model, inp)
 # script_module = torch.jit.trace(raw_model, inp).eval()
 # torch._C._jit_pass_inline(script_module.graph)
 # nodes = list(script_module.graph.nodes())
-# getattr_nodes = [node for node in nodes if node.kind() == "prim::GetAttr"]
+# # print(script_module.graph)
+
+# import qnn_torch
+# params = qnn_torch.get_weight_quant_params(script_module.state_dict())
+# in_scale, _ = qnn_torch.get_input_quant_param(script_module.state_dict())
+# param = params['block.0._packed_params']
+# print("keys:", script_module.state_dict().keys())

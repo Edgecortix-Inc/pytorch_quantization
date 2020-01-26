@@ -1,3 +1,4 @@
+import itertools
 import numpy as np
 import tvm
 from tvm.relay import expr as _expr
@@ -26,55 +27,71 @@ def parse_inputs(ir_inputs, input_shapes):
     return input_vars
 
 
-def getattr_property(node):
-    attribute_names = node.attributeNames()
-    assert(len(attribute_names) == 1)
-    attr_name = node.s(attribute_names[0])
-    node_arg = node.input().debugName()
-    node_name = node.output().debugName()
-    return node_name, attr_name, node_arg
-
-
-def get_param_and_var(torch_tensor, name):
+def get_tensor_and_var(torch_tensor, name):
     tensor = tvm.nd.array(torch_tensor.cpu().numpy())
     var = _expr.var(name, shape=tensor.shape)
     return tensor, var
 
 
-def is_full_attr(getattr_node):
-    uses = getattr_node.output().uses()
-    kinds = [use.user.kind() for use in uses]
-    return len(kinds) > 0 and all([kind != "prim::GetAttr" for kind in kinds])
+def node_name(node):
+    return node.output().debugName()
 
 
-def update_attr_name(prev_map, node_arg, attr_name, input_names):
-    if node_arg in input_names:
-        return attr_name
-    else:
-        return prev_map[node_arg] + "." + attr_name
+def getattr_attr_name(node):
+    attribute_names = node.attributeNames()
+    assert(len(attribute_names) == 1)
+    attr_name = node.s(attribute_names[0])
+    return attr_name
+
+
+def get_attr_chains(root_getattr_node):
+    def concat_lists(lists):
+        return itertools.chain.from_iterable(lists)
+
+    def inner(current, accum):
+        users = [use.user for use in current.output().uses()]
+        next_attrs = [user for user in users if user.kind() == "prim::GetAttr"]
+
+        if len(users) == 0 or not next_attrs:
+            # no next GetAttr -> this is the last attr
+            return [accum]
+
+        return concat_lists([inner(nxt, accum + [nxt]) for nxt in next_attrs])
+
+    return inner(root_getattr_node, [root_getattr_node])
+
+
+def get_full_attr_name(getattrs):
+    return ".".join([getattr_attr_name(node) for node in getattrs])
 
 
 def parse_params(nodes, state_dict, input_names):
     params = {}
     param_tensors = {}
-    node_weight_map = {}
     packed_param_name_map = {}
+    seen = set()
     getattr_nodes = filter(lambda node: node.kind() == "prim::GetAttr", nodes)
 
     for node in getattr_nodes:
-        node_name, attr_name, node_arg = getattr_property(node)
-        new_attr_name = update_attr_name(node_weight_map, node_arg,
-                                         attr_name, input_names)
-        if not is_full_attr(node):
-            node_weight_map[node_name] = new_attr_name
+        if node_name(node) in seen:
             continue
 
-        if attr_name == "_packed_params":
-            packed_param_name_map[node_name] = new_attr_name
-        else:
-            param, var = get_param_and_var(state_dict[new_attr_name], node_name)
-            param_tensors[node_name] = param
-            params[node_name] = var
+        for getattrs in get_attr_chains(node):
+            seen.update(map(node_name, getattrs))
+
+            full_attr = get_full_attr_name(getattrs)
+            full_attr_node_name = node_name(getattrs[-1])
+
+            if full_attr.endswith("_packed_params"):
+                assert full_attr in state_dict
+                packed_param_name_map[full_attr_node_name] = full_attr
+            elif full_attr in state_dict:
+                torch_tensor = state_dict[full_attr]
+                tensor, var = get_tensor_and_var(torch_tensor, full_attr_node_name)
+                param_tensors[full_attr_node_name] = tensor
+                params[full_attr_node_name] = var
+
+            seen.add(node_name)
 
     return params, param_tensors, packed_param_name_map
 

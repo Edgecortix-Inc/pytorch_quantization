@@ -34,3 +34,4 @@ for raw_model in models:
     runtime.run()
     tvm_result = runtime.get_output(0).asnumpy()
     np.allclose(tvm_result, pt_result)
+    print(np.max(np.abs(tvm_result - pt_result)))
