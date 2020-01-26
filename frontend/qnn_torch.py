@@ -58,7 +58,7 @@ def add_input_quant_params_to_op_inputs(graph):
     # Quantized operators in PyTorch do not take input quant params as
     # arguments. But QNN expects them to be passed in as arguements.
     # To simplify the translation of inputs, we add input quant params
-    # to PyTorch quantized operator nodes. See _impl in
+    # to inputs of PyTorch quantized operator nodes. See _impl in
     #  _quantized_conv2d() below for example of why this is helpful.
     quantize_op = 'aten::quantize_per_tensor'
     quantize_node = graph.findNode(quantize_op)
@@ -68,12 +68,12 @@ def add_input_quant_params_to_op_inputs(graph):
     input_zero_point = quantize_node_inputs[2]
 
     needs_input_quant_param = ["quantized::conv2d", "quantized::conv2d_relu",
-                               "aten::dequantize"]
-    for op_name in needs_input_quant_param:
-        op_node = graph.findNode(op_name)
-        if op_node:
-            op_node.addInput(input_scale)
-            op_node.addInput(input_zero_point)
+                               "aten::dequantize", "quantized::linear",
+                               "quantized::add_relu"]
+    for node in graph.nodes():
+        if node.kind() in needs_input_quant_param:
+            node.addInput(input_scale)
+            node.addInput(input_zero_point)
 
 
 def add_quant_params(params, quant_params):
@@ -107,6 +107,21 @@ def _quantized_conv2d(with_relu=False):
         # inputs[7]: output_zero_point
         # inputs[8]: input_scale (added manually by frontend)
         # inputs[9]: input_zero_point (added manually by frontend)
+        weight = inputs[1][0]
+        weight_scale = inputs[1][1]
+        weight_zero_point = inputs[1][2]
+
+        output_scale = _expr.const(1.0 / inputs[6])
+        output_zero_point = _expr.const(inputs[7])
+
+        assert len(inputs) == 10, "Input quant params not found in op inputs"
+        input_scale = _expr.const(1.0 / inputs[8])
+        input_zero_point = _expr.const(inputs[9])
+
+        # print("input_scale, input_zero_point:", input_scale, input_zero_point)
+        # print("weight_scale, weight_zero_point:", weight_scale, weight_zero_point)
+        # print("output_scale, output_zero_point:", output_scale, output_zero_point)
+
         strides, padding, dilation = inputs[2], inputs[3], inputs[4]
         assert isinstance(strides, _expr.Var)
         strides = infer_shape(strides)
@@ -115,27 +130,16 @@ def _quantized_conv2d(with_relu=False):
         assert isinstance(dilation, _expr.Var)
         dilation = infer_shape(dilation)
         groups = inputs[5]
-        # print(strides, padding, dilation, groups)
 
-        weight = inputs[1][0]
-        weight_scale = inputs[1][1]
-        weight_zero_point = inputs[1][2]
-
-        output_scale = _expr.const(1.0 / inputs[6])
-        output_zero_point = _expr.const(inputs[7])
-        # print("output_scale, output_zero_point:", output_scale, output_zero_point)
-
-        assert len(inputs) == 10, "Input quant params not found in op inputs"
-        input_scale = _expr.const(1.0 / inputs[8])
-        input_zero_point = _expr.const(inputs[9])
-
-        # print("input_scale, input_zero_point:", input_scale, input_zero_point)
-        # print("weight_scale, weight_zero_point:", weight_scale, weight_zero_point)
+        weight_shape = infer_shape(weight)
+        kernel_size = (weight_shape[2], weight_shape[3])
 
         conv_out = relay.qnn.op.conv2d(inputs[0], weight,
                                        input_zero_point, weight_zero_point,
                                        input_scale, weight_scale,
-                                       padding=(1, 1), kernel_size=(3, 3))
+                                       kernel_size=kernel_size,
+                                       dilation=dilation, strides=strides,
+                                       padding=padding, groups=groups)
 
         requantized = relay.qnn.op.requantize(conv_out,
                                               input_scale, input_zero_point,
@@ -150,9 +154,54 @@ def _quantized_conv2d(with_relu=False):
     return _impl
 
 
+def _add(with_relu=False):
+    def _impl(inputs, input_type):
+        output_scale = _expr.const(1.0 / inputs[2])
+        output_zero_point = _expr.const(inputs[3])
+        assert len(inputs) == 6, "Input quant params not found in op inputs"
+        input_scale = _expr.const(1.0 / inputs[4])
+        input_zero_point = _expr.const(inputs[5])
+        add = relay.qnn.op.add(inputs[0], inputs[1],
+                               input_scale, input_zero_point,
+                               input_scale, input_zero_point,
+                               output_scale, output_zero_point)
+        if with_relu:
+            return relay.nn.relu(add)
+
+        return add
+
+    return _impl
+
+
+def _linear():
+    def _impl(inputs, input_type):
+        weight = inputs[1][0]
+        weight_scale = inputs[1][1]
+        weight_zero_point = inputs[1][2]
+        output_scale = _expr.const(1.0 / inputs[2])
+        output_zero_point = _expr.const(inputs[3])
+        assert len(inputs) == 6, "Input quant params not found in op inputs"
+        input_scale = _expr.const(1.0 / inputs[4])
+        input_zero_point = _expr.const(inputs[5])
+
+        dense = relay.qnn.op.dense(inputs[0], weight,
+                                   input_zero_point, weight_zero_point,
+                                   input_scale, weight_scale)
+        requantized = relay.qnn.op.requantize(dense,
+                                              input_scale, input_zero_point,
+                                              output_scale, output_zero_point,
+                                              out_dtype="uint8",
+                                              axis=1)
+        return requantized
+
+    return _impl
+
+
 convert_map = {
     'aten::quantize_per_tensor': _quantize_per_tensor(),
     'quantized::conv2d_relu': _quantized_conv2d(True),
     'aten::dequantize': _dequantize(),
     'quantized::conv2d': _quantized_conv2d(),
+    'quantized::add_relu': _add(True),
+    'quantized::linear': _linear()
 }
