@@ -6,6 +6,7 @@ from torchvision import models
 
 from torch_frontend import parse_script_module
 
+
 inp = torch.rand(1, 3, 224, 224, dtype=torch.float)
 input_name = 'X'
 input_shapes = {input_name: (1, 3, 224, 224)}
@@ -26,10 +27,10 @@ for raw_model in models:
         pt_result = script_module(inp).numpy()
 
     with relay.build_config(opt_level=3):
-        json, lib, param = relay.build(mod, target="llvm", params=params)
+        json, lib, params = relay.build(mod, target="llvm", params=params)
 
     runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context("cpu", 0))
-    runtime.set_input(**param)
+    runtime.set_input(**params)
     runtime.set_input("X", inp.numpy())
     runtime.run()
     tvm_result = runtime.get_output(0).asnumpy()
