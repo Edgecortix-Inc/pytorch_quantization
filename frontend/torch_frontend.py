@@ -1,5 +1,6 @@
 import itertools
 import numpy as np
+import torch
 import tvm
 from tvm.relay import expr as _expr
 from tvm.relay import analysis as _analysis
@@ -93,7 +94,7 @@ def parse_params(nodes, state_dict, input_names):
             full_attr = get_full_attr_name(getattrs)
             full_attr_node_name = node_name(getattrs[-1])
 
-            if full_attr.endswith("_packed_params"):
+            if full_attr.endswith("_packed_params"):  # for quantized models
                 assert full_attr in state_dict
                 packed_param_name_map[full_attr_node_name] = full_attr
             elif full_attr in state_dict:
@@ -192,9 +193,16 @@ def get_op_inputs(op_node, outputs, output_index_map):
     return inputs
 
 
+def run_jit_passes(graph):
+    torch._C._jit_pass_inline(graph)
+
+
 def parse_script_module(script_module, input_shapes):
-    nodes = list(script_module.graph.nodes())
-    inputs = list(script_module.graph.inputs())
+    graph = script_module.graph.copy()
+    run_jit_passes(graph)
+
+    nodes = list(graph.nodes())
+    inputs = list(graph.inputs())
     params = script_module.state_dict()
     input_vars = parse_inputs(inputs, input_shapes)
     input_names = input_vars.keys()
@@ -202,20 +210,19 @@ def parse_script_module(script_module, input_shapes):
                                                                input_names)
     consts, ops, op_in_types, list_vars = parse_ops(nodes)
 
-    quantized = len(packed_param_map) > 0
-    if quantized:
-        weight_quant_params = qnn_torch.get_weight_quant_params(params)
-        input_scale, input_zero_point = qnn_torch.get_input_quant_param(params)
-
     input_vars.update(param_vars)
     input_vars.update(list_vars)
     outputs = list(input_vars.values())
     output_index_map = dict(zip(input_vars.keys(), range(len(outputs))))
+    tvm_params = {k: tvm.nd.array(v) for k, v in param_tensors.items()}
 
-    if quantized:
+    if len(packed_param_map) > 0:  # quantized model
+        weight_quant_params = qnn_torch.get_weight_quant_params(params)
+        qnn_torch.add_input_quant_params_to_op_inputs(graph)
         qnn_torch.add_quant_params_to_outputs(outputs, output_index_map,
                                               packed_param_map,
                                               weight_quant_params)
+        qnn_torch.add_quant_params(tvm_params, weight_quant_params)
         convert_map.update(qnn_torch.convert_map)
 
     for node_name, op_node in ops.items():
@@ -226,17 +233,10 @@ def parse_script_module(script_module, input_shapes):
         elif operator != 'prim::ListConstruct':
             output_index_map[node_name] = len(outputs)
             inputs = get_op_inputs(op_node, outputs, output_index_map)
-            if quantized:
-                qnn_torch.add_input_quant_params(operator, inputs,
-                                                 input_scale, input_zero_point)
             call = convert_map[operator](inputs, op_in_types[node_name])
             outputs.append(call)
 
     body = outputs[-1]
     func = tvm.relay.Function(_analysis.free_vars(body), body)
-    param = {k: tvm.nd.array(v) for k, v in param_tensors.items()}
 
-    if quantized:
-        qnn_torch.add_quant_params(param, weight_quant_params)
-
-    return _module.Module.from_expr(func), param
+    return _module.Module.from_expr(func), tvm_params

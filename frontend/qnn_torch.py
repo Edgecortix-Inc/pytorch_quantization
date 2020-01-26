@@ -25,7 +25,7 @@ def unpack_quant_params(param_name, packed_params):
 
     weight = qweight.dequantize().numpy()
     if qweight.qscheme() == torch.per_tensor_affine:
-        scale = np.array([qweight.q_scale()])
+        scale = np.array([1.0 / qweight.q_scale()])
         zero_point = np.array([qweight.q_zero_point()], dtype="int32")
         param = QuantParam(weight, scale, zero_point, param_name)
     else:
@@ -44,28 +44,36 @@ def get_weight_quant_params(state_dict):
     return quant_params
 
 
-def get_input_quant_param(state_dict):
-    input_scale = state_dict["quant.scale"]
-    input_zero_point = state_dict["quant.zero_point"]
-    return 1.0 / float(input_scale[0]), int(input_zero_point[0])
-
-
-def add_quant_params_to_outputs(outputs, name_map,
+def add_quant_params_to_outputs(outputs, output_index_map,
                                 packed_param_map, quant_params):
     for node_name, packed_param_name in packed_param_map.items():
         qparam = quant_params[packed_param_name]
-        name_map[node_name] = len(outputs)
+        output_index_map[node_name] = len(outputs)
         qweight = relay.qnn.op.quantize(qparam.weight_var, qparam.scale,
                                         qparam.zero_point, out_dtype="uint8")
         outputs.append((qweight, qparam.scale, qparam.zero_point))
 
 
-def add_input_quant_params(op_name, inputs, input_scale, input_zero_point):
+def add_input_quant_params_to_op_inputs(graph):
+    # Quantized operators in PyTorch do not take input quant params as
+    # arguments. But QNN expects them to be passed in as arguements.
+    # To simplify the translation of inputs, we add input quant params
+    # to PyTorch quantized operator nodes. See _impl in
+    #  _quantized_conv2d() below for example of why this is helpful.
+    quantize_op = 'aten::quantize_per_tensor'
+    quantize_node = graph.findNode(quantize_op)
+    assert quantize_node
+    quantize_node_inputs = list(quantize_node.inputs())
+    input_scale = quantize_node_inputs[1]
+    input_zero_point = quantize_node_inputs[2]
+
     needs_input_quant_param = ["quantized::conv2d", "quantized::conv2d_relu",
                                "aten::dequantize"]
-    if op_name in needs_input_quant_param:
-        inputs.append(relay.const(input_scale))
-        inputs.append(relay.const(input_zero_point))
+    for op_name in needs_input_quant_param:
+        op_node = graph.findNode(op_name)
+        if op_node:
+            op_node.addInput(input_scale)
+            op_node.addInput(input_zero_point)
 
 
 def add_quant_params(params, quant_params):
@@ -83,7 +91,9 @@ def _quantize_per_tensor():
 
 def _dequantize():
     def _impl(inputs, input_type):
-        return relay.qnn.op.dequantize(inputs[0], inputs[1], inputs[2])
+        inp_scale = _expr.const(1.0 / inputs[1])
+        inp_zero_point = _expr.const(inputs[2])
+        return relay.qnn.op.dequantize(inputs[0], inp_scale, inp_zero_point)
     return _impl
 
 
@@ -95,8 +105,8 @@ def _quantized_conv2d(with_relu=False):
         # inputs[2-5]: stride, padding, dilation, groups
         # inputs[6]: output_scale
         # inputs[7]: output_zero_point
-        # inputs[8]: input_scale
-        # inputs[9]: input_zero_point
+        # inputs[8]: input_scale (added manually by frontend)
+        # inputs[9]: input_zero_point (added manually by frontend)
         strides, padding, dilation = inputs[2], inputs[3], inputs[4]
         assert isinstance(strides, _expr.Var)
         strides = infer_shape(strides)
@@ -111,11 +121,13 @@ def _quantized_conv2d(with_relu=False):
         weight_scale = inputs[1][1]
         weight_zero_point = inputs[1][2]
 
-        output_scale = _expr.const(inputs[6])
+        output_scale = _expr.const(1.0 / inputs[6])
         output_zero_point = _expr.const(inputs[7])
         # print("output_scale, output_zero_point:", output_scale, output_zero_point)
-        input_scale = inputs[8]
-        input_zero_point = inputs[9]
+
+        assert len(inputs) == 10, "Input quant params not found in op inputs"
+        input_scale = _expr.const(1.0 / inputs[8])
+        input_zero_point = _expr.const(inputs[9])
 
         # print("input_scale, input_zero_point:", input_scale, input_zero_point)
         # print("weight_scale, weight_zero_point:", weight_scale, weight_zero_point)
