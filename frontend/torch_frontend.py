@@ -175,12 +175,10 @@ def parse_script_module(script_module, input_shapes):
                                                                input_names)
     consts, ops, op_in_types, list_vars = parse_ops(script_module, input_names)
 
-    quantized = False
-    if packed_param_map:
-        quantized = True
+    quantized = len(packed_param_map) > 0
+    if quantized:
         params = script_module.state_dict()
         weight_quant_params = qnn_torch.get_weight_quant_params(params)
-        quant_param_vars = qnn_torch.get_quant_param_vars(weight_quant_params)
         input_scale, input_zero_point = qnn_torch.get_input_quant_param(params)
 
     input_vars.update(param_vars)
@@ -191,7 +189,7 @@ def parse_script_module(script_module, input_shapes):
     if quantized:
         qnn_torch.add_quant_params_to_outputs(outputs, node_name_to_nid,
                                               packed_param_map,
-                                              quant_param_vars)
+                                              weight_quant_params)
         convert_map.update(qnn_torch.convert_map)
 
     for node_name, op_node in ops.items():
@@ -210,10 +208,9 @@ def parse_script_module(script_module, input_shapes):
 
     body = outputs[-1]
     func = tvm.relay.Function(_analysis.free_vars(body), body)
-    print(func)
     param = {k: tvm.nd.array(v) for k, v in param_tensors.items()}
 
     if quantized:
-        qnn_torch.add_quant_params(param, quant_param_vars, weight_quant_params)
+        qnn_torch.add_quant_params(param, weight_quant_params)
 
     return _module.Module.from_expr(func), param

@@ -134,19 +134,16 @@ for raw_model in models:
     mod, params = parse_script_module(script_module, input_shapes)
 
     mod["main"] = bind_params_by_name(mod["main"], params)
-    print(mod)
 
     with torch.no_grad():
         pt_result = script_module(inp).numpy()
 
     qnn_pass = transform.Sequential([transform.InferType(),
-                                     #transform.FoldConstant(),
                                      qnn.transform.Legalize(),
                                      qnn.transform.CanonicalizeOps()])
+    print(qnn_pass(mod))
 
-    with relay.build_config(opt_level=3):
-        print(qnn_pass(mod))
-    #     print()
+    # with relay.build_config(opt_level=3):
     #     json, lib, param = relay.build(mod, target="llvm", params=params)
 
     # runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context("cpu", 0))
