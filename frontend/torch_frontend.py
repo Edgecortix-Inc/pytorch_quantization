@@ -45,6 +45,17 @@ def getattr_attr_name(node):
 
 
 def get_attr_chains(root_getattr_node):
+    """Returns chains of attribute access starting from root_getattr_node
+
+    For example, given attribute "block", as in "self.block" when "self" points
+    to the top level torch.nn.Module, it returns lists of attribute "chains",
+    e.g. ['block', '2'], ['block', '1'], ['block', '0', '_packed_params']
+
+    These sets of attributes form full attribute accessors. For example,
+    "self.block.1", "self.block.2" will return the second and third submodule,
+    and "self.block.0._packed_params" will return the parameters of the first
+    submodule.
+    """
     def concat_lists(lists):
         return itertools.chain.from_iterable(lists)
 
@@ -52,7 +63,7 @@ def get_attr_chains(root_getattr_node):
         users = [use.user for use in current.output().uses()]
         next_attrs = [user for user in users if user.kind() == "prim::GetAttr"]
 
-        if len(users) == 0 or not next_attrs:
+        if not users or not next_attrs:
             # no next GetAttr -> this is the last attr
             return [accum]
 
@@ -87,7 +98,8 @@ def parse_params(nodes, state_dict, input_names):
                 packed_param_name_map[full_attr_node_name] = full_attr
             elif full_attr in state_dict:
                 torch_tensor = state_dict[full_attr]
-                tensor, var = get_tensor_and_var(torch_tensor, full_attr_node_name)
+                tensor, var = get_tensor_and_var(torch_tensor,
+                                                 full_attr_node_name)
                 param_tensors[full_attr_node_name] = tensor
                 params[full_attr_node_name] = var
 
