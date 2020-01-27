@@ -140,12 +140,16 @@ def get_constant(node):
     if num_attributes == 1:
         attr_name = attribute_names[0]
         ty = node.output().type().kind()
+
         if ty == "IntType" or ty == "BoolType":
             return node.i(attr_name)
         elif ty == "FloatType":
             return node.f(attr_name)
         elif ty == "TensorType":
-            return node.t(attr_name)
+            tensor = node.t(attr_name)
+            if len(tensor.shape) == 0:  # tensor(0.1)
+                return float(tensor)
+            return tensor
         else:
             print(ty)
             assert False  # TODO: handle other types

@@ -717,7 +717,7 @@ def convert_input(data):
             else:
                 return _expr.const(int(data[1:-1]), dtype='float32')
     else:
-        return _expr.const(int(data), dtype='float32')
+        return _expr.const(float(data), dtype='float32')
 
 # Operator mappings
 convert_map = {

@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import torch
 import tvm
@@ -12,19 +13,21 @@ input_name = 'X'
 input_shapes = {input_name: (1, 3, 224, 224)}
 models = [
     models.resnet.resnet18(pretrained=True).eval(),
-    # models.vgg.vgg16_bn(pretrained=True).eval(),
-    # models.mobilenet.mobilenet_v2(pretrained=True).eval(),
-    # models.inception.inception_v3(pretrained=True).eval()
-    # models.squeezenet.squeezenet1_1(pretrained=True).eval(),
-    # models.densenet.densenet121(pretrained=True).eval(),
+    models.vgg.vgg16_bn(pretrained=True).eval(),
+    models.mobilenet.mobilenet_v2(pretrained=True).eval(),
+    models.squeezenet.squeezenet1_1(pretrained=True).eval(),
+    models.densenet.densenet121(pretrained=True).eval(),
+    models.inception.inception_v3(pretrained=True).eval()
 ]
+if os.path.exists("../../MobilenetV3/mobilenetv3.pt"):
+    models.append(torch.jit.load("../../MobilenetV3/mobilenetv3.pt"))
+
 for raw_model in models:
     script_module = torch.jit.trace(raw_model, inp).eval()
-    torch._C._jit_pass_inline(script_module.graph)
     mod, params = parse_script_module(script_module, input_shapes)
 
     with torch.no_grad():
-        pt_result = script_module(inp).numpy()
+        pt_result = raw_model(inp).numpy()
 
     with relay.build_config(opt_level=3):
         json, lib, params = relay.build(mod, target="llvm", params=params)
