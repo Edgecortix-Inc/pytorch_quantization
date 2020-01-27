@@ -153,6 +153,8 @@ def get_constant(node):
             if len(tensor.shape) == 0:  # tensor(0.1)
                 return float(tensor)
             return tensor
+        elif ty == "DeviceObjType":
+            return node.s(attr_name)
         else:
             print(ty)
             assert False  # TODO: handle other types

@@ -63,9 +63,8 @@ def add_input_quant_params_to_op_inputs(graph):
     quantize_op = 'aten::quantize_per_tensor'
     quantize_node = graph.findNode(quantize_op)
     assert quantize_node
-    quantize_node_inputs = list(quantize_node.inputs())
-    input_scale = quantize_node_inputs[1]
-    input_zero_point = quantize_node_inputs[2]
+    input_scale = quantize_node.inputsAt(1)
+    input_zero_point = quantize_node.inputsAt(2)
 
     needs_input_quant_param = ["quantized::conv2d", "quantized::conv2d_relu",
                                "aten::dequantize", "quantized::linear",
