@@ -57,9 +57,7 @@ def _slice():
         begin = [0]*len(end)
         dim = int(inputs[1])
         begin[dim] = int(inputs[2])
-
-        if inputs[3].isdigit():
-            end[dim] = min(end[dim], int(inputs[3]))
+        end[dim] = min(end[dim], inputs[3])
 
         strides.append(int(inputs[4]))
         return _op.transform.strided_slice(data, begin, end, strides)
@@ -582,7 +580,7 @@ def _mean():
         axis = _infer_shape(inputs[1])
 
         keepdims = int(inputs[2])
-        exclude = int(inputs[3])
+        exclude = inputs[3] is not None
 
         return _op.mean(data, axis, keepdims, exclude)
     return _impl

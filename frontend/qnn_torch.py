@@ -123,12 +123,9 @@ def _quantized_conv2d(with_relu=False):
         # print("output_scale, output_zero_point:", output_scale, output_zero_point)
 
         strides, padding, dilation = inputs[2], inputs[3], inputs[4]
-        assert isinstance(strides, _expr.Var)
-        strides = infer_shape(strides)
-        assert isinstance(padding, _expr.Var)
-        padding = infer_shape(padding)
-        assert isinstance(dilation, _expr.Var)
-        dilation = infer_shape(dilation)
+        strides = infer_shape(inputs[2])
+        padding = infer_shape(inputs[3])
+        dilation = infer_shape(inputs[4])
         groups = inputs[5]
 
         weight_shape = infer_shape(weight)

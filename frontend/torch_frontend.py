@@ -154,35 +154,21 @@ def get_constant(node):
         return None
 
 
-def get_list_shape(node, consts):
-    list_shape = []
-    for input_node in node.inputs():
-        if input_node.debugName() in consts.keys():
-            c = consts[input_node.debugName()]
-            assert isinstance(c, int)
-            list_shape.append(c)
-    return list_shape
-
-
 def parse_ops(nodes):
     ops = {}
     op_inputs_types = {}
     consts = {}
-    list_input_vars = {}
     # Traverse nodes and add to graph
     for node in nodes:
         node_name = node.output().debugName()
         if node.kind() == "prim::Constant":
             consts[node_name] = get_constant(node)
-        elif node.kind() == "prim::ListConstruct":
-            list_shape = get_list_shape(node, consts)
-            list_input_vars[node_name] = _expr.var(node_name, shape=list_shape)
 
         if node.kind() != "prim::GetAttr":
             ops[node_name] = node
             op_inputs_types[node_name] = get_input_types(node)
 
-    return consts, ops, op_inputs_types, list_input_vars
+    return consts, ops, op_inputs_types
 
 
 def get_op_inputs(op_node, outputs, output_index_map):
@@ -208,10 +194,9 @@ def parse_script_module(script_module, input_shapes):
     input_names = input_vars.keys()
     param_vars, param_tensors, packed_param_map = parse_params(nodes, params,
                                                                input_names)
-    consts, ops, op_in_types, list_vars = parse_ops(nodes)
+    consts, ops, op_in_types = parse_ops(nodes)
 
     input_vars.update(param_vars)
-    input_vars.update(list_vars)
     outputs = list(input_vars.values())
     output_index_map = dict(zip(input_vars.keys(), range(len(outputs))))
     tvm_params = {k: tvm.nd.array(v) for k, v in param_tensors.items()}
@@ -227,11 +212,14 @@ def parse_script_module(script_module, input_shapes):
 
     for node_name, op_node in ops.items():
         operator = op_node.kind()
+        output_index_map[node_name] = len(outputs)
+
         if operator == "prim::Constant":
-            output_index_map[node_name] = len(outputs)
             outputs.append(consts[node_name])
-        elif operator != 'prim::ListConstruct':
-            output_index_map[node_name] = len(outputs)
+        elif operator == 'prim::ListConstruct':
+            shape = get_op_inputs(op_node, outputs, output_index_map)
+            outputs.append(_expr.var(node_name, shape=shape))
+        else:
             inputs = get_op_inputs(op_node, outputs, output_index_map)
             call = convert_map[operator](inputs, op_in_types[node_name])
             outputs.append(call)
