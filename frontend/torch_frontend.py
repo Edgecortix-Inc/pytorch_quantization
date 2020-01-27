@@ -171,12 +171,17 @@ def parse_ops(nodes):
     return consts, ops, op_inputs_types
 
 
+def get_input_node_names(op_node, output_index_map):
+    return [output_index_map[i.debugName()] for i in op_node.inputs()]
+
+
 def get_op_inputs(op_node, outputs, output_index_map):
-    inputs = []
-    for i in op_node.inputs():
-        inode_name = output_index_map[i.debugName()]
-        inputs.append(outputs[inode_name])
-    return inputs
+    input_names = get_input_node_names(op_node, output_index_map)
+    return [outputs[name] for name in input_names]
+
+
+def is_int_list(lst):
+    return all([isinstance(i, int) for i in lst])
 
 
 def run_jit_passes(graph):
@@ -213,14 +218,15 @@ def parse_script_module(script_module, input_shapes):
     for node_name, op_node in ops.items():
         operator = op_node.kind()
         output_index_map[node_name] = len(outputs)
+        inputs = get_op_inputs(op_node, outputs, output_index_map)
 
         if operator == "prim::Constant":
             outputs.append(consts[node_name])
+        elif operator == 'prim::ListConstruct' and is_int_list(inputs):
+            outputs.append(_expr.var(node_name, shape=inputs))
         elif operator == 'prim::ListConstruct':
-            shape = get_op_inputs(op_node, outputs, output_index_map)
-            outputs.append(_expr.var(node_name, shape=shape))
+            outputs.append(inputs)
         else:
-            inputs = get_op_inputs(op_node, outputs, output_index_map)
             call = convert_map[operator](inputs, op_in_types[node_name])
             outputs.append(call)
 
