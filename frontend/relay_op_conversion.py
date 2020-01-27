@@ -773,7 +773,6 @@ convert_map = {
     'aten::expand'                          : _expand(),
     'aten::Int'                             : _int(),
     'prim::NumToTensor'                     : _numtotensor(),
-    'prim::ListUnpack'                      : _listunpack(),
     'aten::constant_pad_nd'                 : _pad(),
     'aten::permute'                         : _transpose(),
     'aten::sum'                             : _reduce('sum'),

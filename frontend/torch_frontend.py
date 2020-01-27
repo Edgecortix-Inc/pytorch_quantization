@@ -7,7 +7,7 @@ from tvm.relay import analysis as _analysis
 from tvm.relay import module as _module
 
 import qnn_torch
-from relay_conversion import convert_map
+from relay_op_conversion import convert_map
 
 
 def parse_inputs(ir_inputs, input_shapes):
@@ -34,8 +34,13 @@ def get_tensor_and_var(torch_tensor, name):
     return tensor, var
 
 
-def node_name(node):
+def get_output_name(node):
+    assert node.outputsSize() == 1
     return node.output().debugName()
+
+
+def get_output_names(node):
+    return [output.debugName() for output in node.outputs()]
 
 
 def getattr_attr_name(node):
@@ -85,14 +90,14 @@ def parse_params(nodes, state_dict, input_names):
     getattr_nodes = filter(lambda node: node.kind() == "prim::GetAttr", nodes)
 
     for node in getattr_nodes:
-        if node_name(node) in seen:
+        if get_output_name(node) in seen:
             continue
 
         for getattrs in get_attr_chains(node):
-            seen.update(map(node_name, getattrs))
+            seen.update(map(get_output_name, getattrs))
 
             full_attr = get_full_attr_name(getattrs)
-            full_attr_node_name = node_name(getattrs[-1])
+            full_attr_node_name = get_output_name(getattrs[-1])
 
             if full_attr.endswith("_packed_params"):  # for quantized models
                 assert full_attr in state_dict
@@ -103,8 +108,6 @@ def parse_params(nodes, state_dict, input_names):
                                                  full_attr_node_name)
                 param_tensors[full_attr_node_name] = tensor
                 params[full_attr_node_name] = var
-
-            seen.add(node_name)
 
     return params, param_tensors, packed_param_name_map
 
@@ -127,8 +130,8 @@ def get_input_types(op_node):
         else:
             input_list_types.append('UnsupportedType')
 
-    node_type = op_node.output().type()
     if op_node.kind() in ['aten::ones', 'aten::zeros']:
+        node_type = op_node.output().type()
         input_list_types[0] = node_type.scalarType().lower()
 
     return input_list_types
@@ -164,9 +167,12 @@ def parse_ops(nodes):
     consts = {}
     # Traverse nodes and add to graph
     for node in nodes:
-        node_name = node.output().debugName()
-        if node.kind() == "prim::Constant":
-            consts[node_name] = get_constant(node)
+        if node.outputsSize() > 1:
+            node_name = "_".join(get_output_names(node))
+        else:
+            node_name = get_output_name(node)
+            if node.kind() == "prim::Constant":
+                consts[node_name] = get_constant(node)
 
         if node.kind() != "prim::GetAttr":
             ops[node_name] = node
@@ -190,6 +196,12 @@ def is_int_list(lst):
 
 def run_jit_passes(graph):
     torch._C._jit_pass_inline(graph)
+
+
+def add_unpacked_outputs(output_names, unpacked, outputs, output_index_map):
+    for output_name, output in zip(output_names, unpacked):
+        output_index_map[output_name] = len(outputs)
+        outputs.append(output)
 
 
 def parse_script_module(script_module, input_shapes):
@@ -230,6 +242,9 @@ def parse_script_module(script_module, input_shapes):
             outputs.append(_expr.var(node_name, shape=inputs))
         elif operator == 'prim::ListConstruct':
             outputs.append(inputs)
+        elif operator == "prim::ListUnpack":
+            add_unpacked_outputs(get_output_names(op_node), inputs[0],
+                                 outputs, output_index_map)
         else:
             call = convert_map[operator](inputs, op_in_types[node_name])
             outputs.append(call)
