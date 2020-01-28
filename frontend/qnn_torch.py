@@ -25,7 +25,7 @@ def unpack_quant_params(param_name, packed_params):
 
     weight = qweight.dequantize().numpy()
     if qweight.qscheme() == torch.per_tensor_affine:
-        scale = np.array([1.0 / qweight.q_scale()])
+        scale = np.array([qweight.q_scale()])
         zero_point = np.array([qweight.q_zero_point()], dtype="int32")
         param = QuantParam(weight, scale, zero_point, param_name)
     else:
@@ -90,7 +90,7 @@ def _quantize_per_tensor():
 
 def _dequantize():
     def _impl(inputs, input_type):
-        inp_scale = _expr.const(1.0 / inputs[1])
+        inp_scale = _expr.const(inputs[1])
         inp_zero_point = _expr.const(inputs[2])
         return relay.qnn.op.dequantize(inputs[0], inp_scale, inp_zero_point)
     return _impl
@@ -110,11 +110,11 @@ def _quantized_conv2d(with_relu=False):
         weight_scale = inputs[1][1]
         weight_zero_point = inputs[1][2]
 
-        output_scale = _expr.const(1.0 / inputs[6])
+        output_scale = _expr.const(inputs[6])
         output_zero_point = _expr.const(inputs[7])
 
         assert len(inputs) == 10, "Input quant params not found in op inputs"
-        input_scale = _expr.const(1.0 / inputs[8])
+        input_scale = _expr.const(inputs[8])
         input_zero_point = _expr.const(inputs[9])
 
         # print("input_scale, input_zero_point:", input_scale, input_zero_point)
@@ -152,10 +152,10 @@ def _quantized_conv2d(with_relu=False):
 
 def _add(with_relu=False):
     def _impl(inputs, input_type):
-        output_scale = _expr.const(1.0 / inputs[2])
+        output_scale = _expr.const(inputs[2])
         output_zero_point = _expr.const(inputs[3])
         assert len(inputs) == 6, "Input quant params not found in op inputs"
-        input_scale = _expr.const(1.0 / inputs[4])
+        input_scale = _expr.const(inputs[4])
         input_zero_point = _expr.const(inputs[5])
         add = relay.qnn.op.add(inputs[0], inputs[1],
                                input_scale, input_zero_point,
@@ -174,10 +174,10 @@ def _linear():
         weight = inputs[1][0]
         weight_scale = inputs[1][1]
         weight_zero_point = inputs[1][2]
-        output_scale = _expr.const(1.0 / inputs[2])
+        output_scale = _expr.const(inputs[2])
         output_zero_point = _expr.const(inputs[3])
         assert len(inputs) == 6, "Input quant params not found in op inputs"
-        input_scale = _expr.const(1.0 / inputs[4])
+        input_scale = _expr.const(inputs[4])
         input_zero_point = _expr.const(inputs[5])
 
         dense = relay.qnn.op.dense(inputs[0], weight,
