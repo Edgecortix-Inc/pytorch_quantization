@@ -83,12 +83,12 @@ def get_full_attr_name(getattrs):
     return ".".join([getattr_attr_name(node) for node in getattrs])
 
 
-def parse_params(nodes, state_dict):
+def parse_params(graph, state_dict):
+    getattr_nodes = graph.findAllNodes("prim::GetAttr", recurse=True)
     params = {}
     param_tensors = {}
     packed_param_name_map = {}
     seen = set()
-    getattr_nodes = filter(lambda node: node.kind() == "prim::GetAttr", nodes)
 
     for node in getattr_nodes:
         if get_output_name(node) in seen:
@@ -207,13 +207,51 @@ def add_unpacked_outputs(output_names, unpacked, outputs, output_index_map):
         outputs.append(output)
 
 
+def parse_block(block, consts, op_in_types, outputs, output_index_map):
+    consts_block, ops, op_in_types_block = parse_ops(block.nodes())
+    consts_block.update(consts)
+    op_in_types_block.update(op_in_types)
+    return parse_operators(ops, consts_block, op_in_types_block,
+                           outputs, output_index_map)
+
+
+def parse_operators(operators, consts, op_in_types, outputs, output_index_map):
+    for node_name, op_node in operators.items():
+        operator = op_node.kind()
+        output_index_map[node_name] = len(outputs)
+        inputs = get_op_inputs(op_node, outputs, output_index_map)
+
+        if operator == "prim::Constant":
+            outputs.append(consts[node_name])
+        elif operator == 'prim::ListConstruct' and is_int_list(inputs):
+            outputs.append(_expr.var(node_name, shape=inputs))
+        elif operator == 'prim::ListConstruct':
+            outputs.append(inputs)
+        elif operator == "prim::ListUnpack":
+            add_unpacked_outputs(get_output_names(op_node), inputs[0],
+                                 outputs, output_index_map)
+        elif operator == "prim::If":
+            cond = outputs[output_index_map[op_node.inputsAt(0).debugName()]]
+            blocks = list(op_node.blocks())
+            true_branch = parse_block(blocks[0], consts, op_in_types,
+                                      outputs, output_index_map)
+            false_branch = parse_block(blocks[1], consts, op_in_types,
+                                       outputs, output_index_map)
+            outputs.append(_expr.If(cond, true_branch, false_branch))
+        else:
+            relay_op = convert_map[operator]
+            outputs.append(relay_op(inputs, op_in_types[node_name]))
+
+    return outputs[-1]
+
+
 def parse_script_module(script_module, input_shapes):
     graph = script_module.graph.copy()
     run_jit_passes(graph)
 
     params = script_module.state_dict()
     input_vars = parse_inputs(graph.inputs(), input_shapes)
-    param_vars, tensors, packed_param_map = parse_params(graph.nodes(), params)
+    param_vars, tensors, packed_param_map = parse_params(graph, params)
     consts, ops, op_in_types = parse_ops(graph.nodes())
 
     input_vars.update(param_vars)
@@ -230,25 +268,7 @@ def parse_script_module(script_module, input_shapes):
         qnn_torch.add_quant_params(tvm_params, weight_quant_params)
         convert_map.update(qnn_torch.convert_map)
 
-    for node_name, op_node in ops.items():
-        operator = op_node.kind()
-        output_index_map[node_name] = len(outputs)
-        inputs = get_op_inputs(op_node, outputs, output_index_map)
-
-        if operator == "prim::Constant":
-            outputs.append(consts[node_name])
-        elif operator == 'prim::ListConstruct' and is_int_list(inputs):
-            outputs.append(_expr.var(node_name, shape=inputs))
-        elif operator == 'prim::ListConstruct' or operator == 'prim::TupleConstruct':
-            outputs.append(inputs)
-        elif operator == "prim::ListUnpack" or operator == 'prim::TupleUnpack':
-            add_unpacked_outputs(get_output_names(op_node), inputs[0],
-                                 outputs, output_index_map)
-        else:
-            relay_op = convert_map[operator]
-            outputs.append(relay_op(inputs, op_in_types[node_name]))
-
-    body = outputs[-1]
+    body = parse_operators(ops, consts, op_in_types, outputs, output_index_map)
     func = tvm.relay.Function(_analysis.free_vars(body), body)
 
     return _module.Module.from_expr(func), tvm_params

@@ -568,7 +568,7 @@ def _dropout():
     return _impl
 
 def _reduce(name):
-    def _impl(inputs, attrs, params):
+    def _impl(inputs, attrs):
         data = inputs[0]
         return get_relay_op(name)(data)
     return _impl
@@ -576,10 +576,18 @@ def _reduce(name):
 def _mean():
     def _impl(inputs, input_types):
         data = inputs[0]
-        axis = _infer_shape(inputs[1])
-
-        keepdims = int(inputs[2])
-        exclude = inputs[3] is not None
+        if inputs[1]:
+            axis = _infer_shape(inputs[1])
+        else:
+            axis = None
+        if len(inputs) > 2 and inputs[2]:
+            keepdims = int(inputs[2])
+        else:
+            keepdims = False
+        if len(inputs) > 3 and inputs[3]:
+            exclude = int(inputs[3])
+        else:
+            exclude = False
 
         return _op.mean(data, axis, keepdims, exclude)
     return _impl
@@ -701,6 +709,7 @@ def _sqrt():
         return _op.tensor.sqrt(data)
     return _impl
 
+
 def _zeros_like():
     def _impl(inputs, input_types):
         data = inputs[0]
@@ -726,15 +735,38 @@ def _upsample(method):
         return _op.image.resize(data, out_size, "NCHW", "bilinear", coord_trans)
     return _impl
 
+
 def _identity():
     def _impl(inputs, input_types):
         return inputs[0]
     return _impl
 
+
 def _floor():
     def _impl(inputs, input_types):
         data = inputs[0]
         return get_relay_op("floor")(data)
+
+
+def wrap_const(c):
+    if not isinstance(c, _expr.Expr):
+        return _expr.const(c)
+    return c
+
+
+def _gt():
+    def _impl(inputs, input_types):
+        assert len(inputs) == 2
+        lhs = wrap_const(inputs[0])
+        rhs = wrap_const(inputs[1])
+        return _op.tensor.greater(lhs, rhs)
+    return _impl
+
+
+def _Bool():
+    def _impl(inputs, input_types):
+        assert len(inputs) == 1
+        return inputs[0]
     return _impl
 
 
@@ -818,4 +850,6 @@ convert_map = {
     'aten::upsample_bilinear2d'             : _upsample("bilinear"),
     'aten::detach'                          : _identity(),
     'aten::floor'                           : _floor()
+    'aten::gt'                              : _gt(),
+    'aten::Bool'                            : _Bool(),
 }
