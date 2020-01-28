@@ -10,7 +10,8 @@ import qnn_torch
 from relay_op_conversion import convert_map
 
 
-def parse_inputs(ir_inputs, input_shapes):
+def parse_inputs(graph_inputs, input_shapes):
+    ir_inputs = list(graph_inputs)
     ir_names = [i.debugName() for i in ir_inputs]
     input_vars = {}
 
@@ -82,7 +83,7 @@ def get_full_attr_name(getattrs):
     return ".".join([getattr_attr_name(node) for node in getattrs])
 
 
-def parse_params(nodes, state_dict, input_names):
+def parse_params(nodes, state_dict):
     params = {}
     param_tensors = {}
     packed_param_name_map = {}
@@ -210,19 +211,15 @@ def parse_script_module(script_module, input_shapes):
     graph = script_module.graph.copy()
     run_jit_passes(graph)
 
-    nodes = list(graph.nodes())
-    inputs = list(graph.inputs())
     params = script_module.state_dict()
-    input_vars = parse_inputs(inputs, input_shapes)
-    input_names = input_vars.keys()
-    param_vars, param_tensors, packed_param_map = parse_params(nodes, params,
-                                                               input_names)
-    consts, ops, op_in_types = parse_ops(nodes)
+    input_vars = parse_inputs(graph.inputs(), input_shapes)
+    param_vars, tensors, packed_param_map = parse_params(graph.nodes(), params)
+    consts, ops, op_in_types = parse_ops(graph.nodes())
 
     input_vars.update(param_vars)
     outputs = list(input_vars.values())
     output_index_map = dict(zip(input_vars.keys(), range(len(outputs))))
-    tvm_params = {k: tvm.nd.array(v) for k, v in param_tensors.items()}
+    tvm_params = {k: tvm.nd.array(v) for k, v in tensors.items()}
 
     if len(packed_param_map) > 0:  # quantized model
         qnn_torch.add_input_quant_params_to_op_inputs(graph)
@@ -248,8 +245,8 @@ def parse_script_module(script_module, input_shapes):
             add_unpacked_outputs(get_output_names(op_node), inputs[0],
                                  outputs, output_index_map)
         else:
-            call = convert_map[operator](inputs, op_in_types[node_name])
-            outputs.append(call)
+            relay_op = convert_map[operator]
+            outputs.append(relay_op(inputs, op_in_types[node_name]))
 
     body = outputs[-1]
     func = tvm.relay.Function(_analysis.free_vars(body), body)
