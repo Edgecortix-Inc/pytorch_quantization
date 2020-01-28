@@ -239,9 +239,9 @@ def parse_script_module(script_module, input_shapes):
             outputs.append(consts[node_name])
         elif operator == 'prim::ListConstruct' and is_int_list(inputs):
             outputs.append(_expr.var(node_name, shape=inputs))
-        elif operator == 'prim::ListConstruct':
+        elif operator == 'prim::ListConstruct' or operator == 'prim::TupleConstruct':
             outputs.append(inputs)
-        elif operator == "prim::ListUnpack":
+        elif operator == "prim::ListUnpack" or operator == 'prim::TupleUnpack':
             add_unpacked_outputs(get_output_names(op_node), inputs[0],
                                  outputs, output_index_map)
         else:

@@ -1,12 +1,11 @@
 import numpy as np
-
 import tvm
 
 from tvm.relay import expr as _expr
 from tvm.relay import op as _op
 from tvm.relay.frontend.common import get_relay_op
 from tvm.relay.frontend.common import infer_shape as _infer_shape
-
+from tvm.relay.frontend.common import infer_value as _infer_value
 
 # operator implementation
 def _elemwise(name):
@@ -702,6 +701,43 @@ def _sqrt():
         return _op.tensor.sqrt(data)
     return _impl
 
+def _zeros_like():
+    def _impl(inputs, input_types):
+        data = inputs[0]
+        return get_relay_op("zeros_like")(data)
+    return _impl
+
+
+def _upsample(method):
+    def _impl(inputs, input_types):
+        if isinstance(inputs[1], _expr.Var):
+            out_size = _infer_shape(inputs[1])
+        elif isinstance(inputs[1], list):
+            infer_res = [_infer_value(size, {}) for size in inputs[1]]
+            out_size = [np.asscalar(res.asnumpy().astype(np.int)) for res in infer_res]
+        data = inputs[0]
+
+        align_corners = inputs[2]
+        if align_corners == '1':
+            coord_trans = "align_corners"
+        else:
+            coord_trans = "half_pixel"
+        # read that we should actually start to use interpolate(..., mode='bilinear', align_corners=True) instead of upsample
+        return _op.image.resize(data, out_size, "NCHW", "bilinear", coord_trans)
+    return _impl
+
+def _identity():
+    def _impl(inputs, input_types):
+        return inputs[0]
+    return _impl
+
+def _floor():
+    def _impl(inputs, input_types):
+        data = inputs[0]
+        return get_relay_op("floor")(data)
+    return _impl
+
+
 # Helper functions for operator implementation
 
 def convert_input(data):
@@ -777,5 +813,9 @@ convert_map = {
     'aten::permute'                         : _transpose(),
     'aten::sum'                             : _reduce('sum'),
     'aten::prod'                            : _reduce('prod'),
-    'aten::sqrt'                            : _sqrt()
+    'aten::sqrt'                            : _sqrt(),
+    'aten::zeros_like'                      : _zeros_like(),
+    'aten::upsample_bilinear2d'             : _upsample("bilinear"),
+    'aten::detach'                          : _identity(),
+    'aten::floor'                           : _floor()
 }
