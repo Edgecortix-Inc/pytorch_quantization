@@ -126,21 +126,23 @@ def _zeros():
             shape = _infer_shape(inputs[0])
         elif isinstance(inputs[0], (_expr.Call, _expr.TupleGetItem)):
             shape = _infer_shape(inputs[0])
+        elif isinstance(inputs[0], (list, tuple)):
+            shape = inputs[0]
         else:
             shape = inputs[0].shape
 
-        fill_value = _get_fill_value(input_types)
+        fill_value = _get_fill_value(input_types, 0)
 
         return _op.full(fill_value, shape, dtype=input_types[0])
     return _impl
 
-def _get_fill_value(input_types):
+def _get_fill_value(input_types, int_val):
     if input_types[0] == 'int':
-        fill_value = _expr.const(1)
+        fill_value = _expr.const(int_val)
     elif input_types[0] == 'float':
-        fill_value = _expr.const(1.0)
+        fill_value = _expr.const(float(int_val))
     else:
-        fill_value = _expr.const(1.0)
+        fill_value = _expr.const(float(int_val))
 
     return fill_value
 
@@ -485,12 +487,11 @@ def _dense():
 
 def _size():
     def _impl(inputs, input_types):
-        axis = int(inputs[1])
-        if isinstance(inputs[0], _expr.Var):
-            shape = _infer_shape(inputs[0])
-        else:
-            shape = _infer_shape(inputs[0])
-        return shape[axis]
+        shape = _infer_shape(inputs[0])
+        if len(inputs) > 1:
+            axis = int(inputs[1])
+            return shape[axis]
+        return shape
     return _impl
 
 def _numtotensor():
@@ -763,10 +764,26 @@ def _gt():
     return _impl
 
 
+def _lt():
+    def _impl(inputs, input_types):
+        assert len(inputs) == 2
+        lhs = wrap_const(inputs[0])
+        rhs = wrap_const(inputs[1])
+        return _op.tensor.less(lhs, rhs)
+    return _impl
+
+
 def _Bool():
     def _impl(inputs, input_types):
         assert len(inputs) == 1
         return inputs[0]
+    return _impl
+
+
+def _Float():
+    def _impl(inputs, input_types):
+        assert len(inputs) == 1
+        return _op.cast(inputs[0], "float")
     return _impl
 
 
@@ -850,6 +867,8 @@ convert_map = {
     'aten::upsample_bilinear2d'             : _upsample("bilinear"),
     'aten::detach'                          : _identity(),
     'aten::floor'                           : _floor()
+    'aten::lt'                              : _lt(),
     'aten::gt'                              : _gt(),
     'aten::Bool'                            : _Bool(),
+    'aten::Float'                           : _Float()
 }

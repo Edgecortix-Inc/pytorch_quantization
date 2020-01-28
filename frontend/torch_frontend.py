@@ -2,9 +2,12 @@ import itertools
 import numpy as np
 import torch
 import tvm
+from tvm import relay
 from tvm.relay import expr as _expr
 from tvm.relay import analysis as _analysis
 from tvm.relay import module as _module
+from tvm.relay.loops import while_loop
+from tvm.relay import op as _op
 
 import qnn_torch
 from relay_op_conversion import convert_map
@@ -42,6 +45,10 @@ def get_output_name(node):
 
 def get_output_names(node):
     return [output.debugName() for output in node.outputs()]
+
+
+def get_input_names(node):
+    return [inp.debugName() for inp in node.inputs()]
 
 
 def getattr_attr_name(node):
@@ -131,9 +138,9 @@ def get_input_types(op_node):
         else:
             input_list_types.append('UnsupportedType')
 
-    if op_node.kind() in ['aten::ones', 'aten::zeros']:
-        node_type = op_node.output().type()
-        input_list_types[0] = node_type.scalarType().lower()
+    # if op_node.kind() in ['aten::ones', 'aten::zeros']:
+    #     node_type = op_node.output().type()
+    #     input_list_types[0] = node_type.scalarType().lower()
 
     return input_list_types
 
@@ -141,6 +148,7 @@ def get_input_types(op_node):
 def get_constant(node):
     attribute_names = node.attributeNames()
     num_attributes = len(attribute_names)
+
     if num_attributes == 1:
         attr_name = attribute_names[0]
         ty = node.output().type().kind()
@@ -156,8 +164,10 @@ def get_constant(node):
             return tensor
         elif ty == "DeviceObjType":
             return node.s(attr_name)
+        elif ty == "FunctionType":
+            return None
         else:
-            print(ty)
+            print(ty, node)
             assert False  # TODO: handle other types
     else:
         assert num_attributes == 0
@@ -185,7 +195,7 @@ def parse_ops(nodes):
 
 
 def get_input_node_names(op_node, output_index_map):
-    return [output_index_map[i.debugName()] for i in op_node.inputs()]
+    return [output_index_map[name] for name in get_input_names(op_node)]
 
 
 def get_op_inputs(op_node, outputs, output_index_map):
@@ -201,8 +211,8 @@ def run_jit_passes(graph):
     torch._C._jit_pass_inline(graph)
 
 
-def add_unpacked_outputs(output_names, unpacked, outputs, output_index_map):
-    for output_name, output in zip(output_names, unpacked):
+def update_outputs_from_pairs(name_output_pairs, outputs, output_index_map):
+    for output_name, output in name_output_pairs:
         output_index_map[output_name] = len(outputs)
         outputs.append(output)
 
@@ -213,6 +223,51 @@ def parse_block(block, consts, op_in_types, outputs, output_index_map):
     op_in_types_block.update(op_in_types)
     return parse_operators(ops, consts_block, op_in_types_block,
                            outputs, output_index_map)
+
+
+def parse_loop(op_node, consts, op_in_types, outputs, output_index_map):
+
+    def get_input(index):
+        var_name = op_node.inputsAt(index).debugName()
+        if var_name in consts:
+            return _expr.const(consts[var_name])
+        assert var_name in output_index_map
+        output_ind = output_index_map[var_name]
+        out = outputs[output_ind]
+        if isinstance(out, _expr.Expr):  # TODO: remove this condition
+            return out
+        return _expr.const(out)
+
+    max_loop_count = get_input(0)
+    init_cond = get_input(1)
+    num_loop_var = len(list(op_node.inputs())) - 2
+    init_vals = [get_input(i + 2) for i in range(num_loop_var)]
+
+    body_block = list(op_node.blocks())[0]
+    inames = get_input_names(body_block)
+    loop_input_vals = [_expr.const(1), init_cond] + init_vals
+    update_outputs_from_pairs(zip(inames, loop_input_vals),
+                              outputs, output_index_map)
+
+    def cond(*current_vals):
+        i = current_vals[0]
+        lhs = _op.greater_equal(i, _expr.const(1, 'int32'))
+        rhs = _op.less_equal(i, max_loop_count)
+        return _op.logical_and(lhs, rhs)
+
+    def body(*current_vals):
+        for (i, val) in enumerate(current_vals):
+            outputs[output_index_map[inames[i]]] = val
+        ret = parse_block(body_block, consts, op_in_types,
+                          outputs, output_index_map)
+        incr = _expr.const(1, 'int32')
+        return current_vals[0] + incr, ret
+
+    loop_count_var = _expr.var(inames[0], shape=(), dtype='int32')
+    loop_vars = [_expr.var(name) for name in inames[1:]]
+    loop = while_loop(cond, [loop_count_var] + loop_vars, body)
+    loop_val = loop(_expr.const(1), *init_vals)
+    return _expr.TupleGetItem(loop_val, 1)
 
 
 def parse_operators(operators, consts, op_in_types, outputs, output_index_map):
@@ -228,8 +283,8 @@ def parse_operators(operators, consts, op_in_types, outputs, output_index_map):
         elif operator == 'prim::ListConstruct':
             outputs.append(inputs)
         elif operator == "prim::ListUnpack":
-            add_unpacked_outputs(get_output_names(op_node), inputs[0],
-                                 outputs, output_index_map)
+            update_outputs_from_pairs(zip(get_output_names(op_node), inputs[0]),
+                                      outputs, output_index_map)
         elif operator == "prim::If":
             cond = outputs[output_index_map[op_node.inputsAt(0).debugName()]]
             blocks = list(op_node.blocks())
@@ -238,6 +293,10 @@ def parse_operators(operators, consts, op_in_types, outputs, output_index_map):
             false_branch = parse_block(blocks[1], consts, op_in_types,
                                        outputs, output_index_map)
             outputs.append(_expr.If(cond, true_branch, false_branch))
+        elif operator == "prim::Loop":
+            loop = parse_loop(op_node, consts, op_in_types,
+                              outputs, output_index_map)
+            outputs.append(loop)
         else:
             relay_op = convert_map[operator]
             outputs.append(relay_op(inputs, op_in_types[node_name]))
@@ -248,6 +307,7 @@ def parse_operators(operators, consts, op_in_types, outputs, output_index_map):
 def parse_script_module(script_module, input_shapes):
     graph = script_module.graph.copy()
     run_jit_passes(graph)
+    #print(graph, graph.code)
 
     params = script_module.state_dict()
     input_vars = parse_inputs(graph.inputs(), input_shapes)

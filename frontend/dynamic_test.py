@@ -1,5 +1,3 @@
-import os
-import numpy as np
 import torch
 import tvm
 from tvm import relay
@@ -40,12 +38,70 @@ class NestedIf(torch.nn.Module):
         return output
 
 
+class ScalarLoop(torch.nn.Module):
+    def forward(self, inp):
+        a = 0.0
+        for i in range(inp.size(0)):
+            b = i * i
+            b = float(b) + 1
+            a += b
+        return a
+
+
+class SimpleLoop(torch.nn.Module):
+    def forward(self, inp):
+        a = inp
+        for i in range(inp.size(0)):
+            b = a * 2
+            c = a + b
+            a += c
+        return a
+
+
+class LoopWithIf(torch.nn.Module):
+    def forward(self, inp):
+        a = inp
+        for i in range(inp.size(0)):
+            b = a * 2
+            b = a + b
+            if b.sum() > 0.0:
+                a += b
+            else:
+                a -= b
+        return a
+
+
+class NestedLoop(torch.nn.Module):
+    def forward(self, inp):
+        a = torch.zeros(inp.size())
+        for i in range(inp.size(0)):
+            b = a * i
+            for j in range(inp.size(1)):
+                a += b * j
+        return a
+
+
+# class SimpleWhileLoop(torch.nn.Module):
+#     def forward(self, inp):
+#         a = 1
+#         i = 0
+#         while i < 10:
+#             a += i
+#             i += 2
+#         return a
+
+
 input_name = 'X'
 input_shapes = {input_name: (10, 20)}
 
 models = [
     SimpleIf(10, 20).eval(),
-    NestedIf(10, 20).eval()
+    NestedIf(10, 20).eval(),
+    ScalarLoop().eval(),
+    SimpleLoop().eval(),
+    LoopWithIf().eval(),
+    # SimpleWhileLoop().eval(),
+    # NestedLoop().eval()  # not work yet (due to free variable issue)
 ]
 
 for raw_model in models:
@@ -60,8 +116,11 @@ for raw_model in models:
         inp = torch.rand(input_shapes[input_name], dtype=torch.float)
 
         with torch.no_grad():
-            pt_result = raw_model(inp).numpy()
+            pt_result = raw_model(inp.clone())
 
         params[input_name] = inp.numpy()
         op_res = evaluator(**params)
-        tvm.testing.assert_allclose(op_res.asnumpy(), pt_result, rtol=1e-3)
+        if not isinstance(pt_result, torch.Tensor):
+            print(pt_result, op_res)
+        else:
+            tvm.testing.assert_allclose(op_res.asnumpy(), pt_result.numpy(), rtol=1e-3)
