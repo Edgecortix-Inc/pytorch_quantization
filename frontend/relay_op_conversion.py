@@ -718,7 +718,7 @@ def _upsample(method):
         data = inputs[0]
 
         align_corners = inputs[2]
-        if align_corners == '1':
+        if align_corners:
             coord_trans = "align_corners"
         else:
             coord_trans = "half_pixel"
