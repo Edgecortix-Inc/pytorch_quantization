@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import tvm
 from tvm import relay
@@ -40,10 +41,10 @@ class NestedIf(torch.nn.Module):
 
 class ScalarLoop(torch.nn.Module):
     def forward(self, inp):
-        a = 0.0
+        a = 0
         for i in range(inp.size(0)):
             b = i * i
-            b = float(b) + 1
+            b = b + 1
             a += b
         return a
 
@@ -52,7 +53,7 @@ class SimpleLoop(torch.nn.Module):
     def forward(self, inp):
         a = inp
         for i in range(inp.size(0)):
-            b = a * 2
+            b = a * 2.
             c = a + b
             a += c
         return a
@@ -62,7 +63,7 @@ class LoopWithIf(torch.nn.Module):
     def forward(self, inp):
         a = inp
         for i in range(inp.size(0)):
-            b = a * 2
+            b = a * 2.
             b = a + b
             if b.sum() > 0.0:
                 a += b
@@ -73,7 +74,7 @@ class LoopWithIf(torch.nn.Module):
 
 class NestedLoop(torch.nn.Module):
     def forward(self, inp):
-        a = torch.zeros(inp.size())
+        a = inp
         for i in range(inp.size(0)):
             b = a * i
             for j in range(inp.size(1)):
@@ -81,14 +82,24 @@ class NestedLoop(torch.nn.Module):
         return a
 
 
-# class SimpleWhileLoop(torch.nn.Module):
-#     def forward(self, inp):
-#         a = 1
-#         i = 0
-#         while i < 10:
-#             a += i
-#             i += 2
-#         return a
+class SimpleScalarWhileLoop(torch.nn.Module):
+    def forward(self, inp):
+        a = 1
+        i = 0
+        while i < inp.size(0):
+            a += i
+            i += 2
+        return a
+
+
+class SimpleWhileLoop(torch.nn.Module):
+    def forward(self, inp):
+        a = inp
+        i = 0
+        while i < inp.size(0):
+            a += a * float(i) * 2.0
+            i += 1
+        return a
 
 
 input_name = 'X'
@@ -100,8 +111,9 @@ models = [
     ScalarLoop().eval(),
     SimpleLoop().eval(),
     LoopWithIf().eval(),
-    # SimpleWhileLoop().eval(),
-    # NestedLoop().eval()  # not work yet (due to free variable issue)
+    SimpleScalarWhileLoop().eval(),
+    SimpleWhileLoop().eval(),
+    # NestedLoop().eval()  # not work yet (due to free variable issue in vm)
 ]
 
 for raw_model in models:
@@ -121,6 +133,10 @@ for raw_model in models:
         params[input_name] = inp.numpy()
         op_res = evaluator(**params)
         if not isinstance(pt_result, torch.Tensor):
-            print(pt_result, op_res)
+            tvm_res = np.asscalar(op_res.asnumpy())
+            print(abs(pt_result - tvm_res))
+            assert pt_result == tvm_res
         else:
-            tvm.testing.assert_allclose(op_res.asnumpy(), pt_result.numpy(), rtol=1e-3)
+            print(np.max(np.abs(op_res.asnumpy() - pt_result.numpy())))
+            tvm.testing.assert_allclose(op_res.asnumpy(), pt_result.numpy(),
+                                        rtol=1e-5, atol=1e-5)

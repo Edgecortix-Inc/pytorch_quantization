@@ -1,4 +1,7 @@
+# This is taken from WIP PR by AWS
+
 import numpy as np
+
 import tvm
 
 from tvm.relay import expr as _expr
@@ -7,11 +10,18 @@ from tvm.relay.frontend.common import get_relay_op
 from tvm.relay.frontend.common import infer_shape as _infer_shape
 from tvm.relay.frontend.common import infer_value as _infer_value
 
+
+def wrap_const(c):
+    if not isinstance(c, _expr.Expr):
+        return _expr.const(c)
+    return c
+
+
 # operator implementation
 def _elemwise(name):
     def _impl(inputs, input_types):
-        data0 = convert_input(inputs[0])
-        data1 = convert_input(inputs[1])
+        data0 = wrap_const(inputs[0])
+        data1 = wrap_const(inputs[1])
 
         if not isinstance(data0, (_expr.Call, _expr.TupleGetItem, _expr.Var)):
             temp = data0
@@ -65,25 +75,9 @@ def _slice():
 def _select():
     def _impl(inputs, input_types):
         data = inputs[0]
-        inferred_shape = _infer_shape(data)
-        end = []
-
-        for infer in inferred_shape:
-            end.append(int(infer))
-
-        begin = [0]*len(end)
-        dim = int(inputs[1])
-        index = int(inputs[2])
-
-        end[dim] = index+1
-        begin[dim] = index
-
-        strides = [1]*len(end)
-
-        sym = _op.transform.strided_slice(data, begin, end, strides)
-        axis = [dim]
-
-        return _op.transform.squeeze(sym, axis)
+        axis = int(inputs[1])
+        index = wrap_const(inputs[2])
+        return _op.transform.take(data, index, axis=axis)
     return _impl
 
 def _convert_data_type(input_type):
@@ -115,9 +109,9 @@ def _ones():
         else:
             shape = inputs[0].shape
 
-        fill_value = _get_fill_value(input_types)
+        fill_value = _get_fill_value(input_types, 1)
 
-        return get_relay_op('full')(fill_value, shape, dtype=_convert_data_type(input_types[0]))
+        return get_relay_op('full')(fill_value, shape, dtype="float32")
     return _impl
 
 def _zeros():
@@ -132,8 +126,7 @@ def _zeros():
             shape = inputs[0].shape
 
         fill_value = _get_fill_value(input_types, 0)
-
-        return _op.full(fill_value, shape, dtype=input_types[0])
+        return _op.full(fill_value, shape, dtype="float32")
     return _impl
 
 def _get_fill_value(input_types, int_val):
@@ -750,10 +743,18 @@ def _floor():
     return _impl
 
 
-def wrap_const(c):
-    if not isinstance(c, _expr.Expr):
-        return _expr.const(c)
-    return c
+def _neg():
+    def _impl(inputs, input_types):
+        data = inputs[0]
+        return _op.tensor.negative(data)
+    return _impl
+
+
+def _tanh():
+    def _impl(inputs, input_types):
+        data = inputs[0]
+        return _op.tensor.tanh(data)
+    return _impl
 
 
 def _gt():
@@ -788,22 +789,19 @@ def _Float():
     return _impl
 
 
-# Helper functions for operator implementation
+def _stack():
+    def _impl(inputs, input_types):
+        print("stack input:", inputs)
+        return _op.tensor.stack(inputs[0], 0)
+    return _impl
 
-def convert_input(data):
-    """ Handle input conversion for elemwise op """
-    if isinstance(data, (_expr.Call, _expr.TupleGetItem, _expr.Var)):
-        return data
-    elif isinstance(data, str):
-        if len(data) == 1:
-            return _expr.const(int(data), dtype='float32')
-        else:
-            if '.' in data:
-                return _expr.const(float(data[1:-1]), dtype='float32')
-            else:
-                return _expr.const(int(data[1:-1]), dtype='float32')
-    else:
-        return _expr.const(float(data), dtype='float32')
+
+def _mm():
+    def _impl(inputs, input_types):
+        print("mm input:", inputs)
+        return _op.nn.dense(inputs[0], inputs[1])
+    return _impl
+
 
 # Operator mappings
 convert_map = {
@@ -871,5 +869,9 @@ convert_map = {
     'aten::lt'                              : _lt(),
     'aten::gt'                              : _gt(),
     'aten::Bool'                            : _Bool(),
-    'aten::Float'                           : _Float()
+    'aten::Float'                           : _Float(),
+    'aten::neg'                             : _neg(),
+    'aten::tanh'                            : _tanh(),
+    'aten::stack'                           : _stack(),
+    'aten::mm'                              : _matmul(),
 }

@@ -2,21 +2,21 @@ import itertools
 import numpy as np
 import torch
 import tvm
-from tvm import relay
 from tvm.relay import expr as _expr
 from tvm.relay import analysis as _analysis
 from tvm.relay import module as _module
 from tvm.relay.loops import while_loop
 from tvm.relay import op as _op
 
-import qnn_torch
-from relay_op_conversion import convert_map
+from relay_op_conversion import convert_map, wrap_const
 
 
 def parse_inputs(graph_inputs, input_shapes):
     ir_inputs = list(graph_inputs)
     ir_names = [i.debugName() for i in ir_inputs]
     input_vars = {}
+
+    assert len(input_shapes) == len(ir_inputs) - 1
 
     for input_name, ir_input in zip(input_shapes, ir_inputs[1:]):
         input_shape = input_shapes[input_name]
@@ -94,7 +94,6 @@ def parse_params(graph, state_dict):
     getattr_nodes = graph.findAllNodes("prim::GetAttr", recurse=True)
     params = {}
     param_tensors = {}
-    packed_param_name_map = {}
     seen = set()
 
     for node in getattr_nodes:
@@ -107,17 +106,14 @@ def parse_params(graph, state_dict):
             full_attr = get_full_attr_name(getattrs)
             full_attr_node_name = get_output_name(getattrs[-1])
 
-            if full_attr.endswith("_packed_params"):  # for quantized models
-                assert full_attr in state_dict
-                packed_param_name_map[full_attr_node_name] = full_attr
-            elif full_attr in state_dict:
+            if full_attr in state_dict:
                 torch_tensor = state_dict[full_attr]
                 tensor, var = get_tensor_and_var(torch_tensor,
                                                  full_attr_node_name)
                 param_tensors[full_attr_node_name] = tensor
                 params[full_attr_node_name] = var
 
-    return params, param_tensors, packed_param_name_map
+    return params, param_tensors
 
 
 def get_input_types(op_node):
@@ -138,9 +134,11 @@ def get_input_types(op_node):
         else:
             input_list_types.append('UnsupportedType')
 
-    # if op_node.kind() in ['aten::ones', 'aten::zeros']:
-    #     node_type = op_node.output().type()
-    #     input_list_types[0] = node_type.scalarType().lower()
+    if op_node.kind() in ['aten::ones', 'aten::zeros']:
+        node_type = op_node.output().type()
+        scalar_type = node_type.scalarType()
+        if scalar_type:
+            input_list_types[0] = scalar_type.lower()
 
     return input_list_types
 
@@ -176,22 +174,17 @@ def get_constant(node):
 
 def parse_ops(nodes):
     ops = {}
-    op_inputs_types = {}
-    consts = {}
     # Traverse nodes and add to graph
     for node in nodes:
         if node.outputsSize() > 1:
             node_name = "_".join(get_output_names(node))
         else:
             node_name = get_output_name(node)
-            if node.kind() == "prim::Constant":
-                consts[node_name] = get_constant(node)
 
         if node.kind() != "prim::GetAttr":
             ops[node_name] = node
-            op_inputs_types[node_name] = get_input_types(node)
 
-    return consts, ops, op_inputs_types
+    return ops
 
 
 def get_input_node_names(op_node, output_index_map):
@@ -217,20 +210,19 @@ def update_outputs_from_pairs(name_output_pairs, outputs, output_index_map):
         outputs.append(output)
 
 
-def parse_block(block, consts, op_in_types, outputs, output_index_map):
-    consts_block, ops, op_in_types_block = parse_ops(block.nodes())
-    consts_block.update(consts)
-    op_in_types_block.update(op_in_types)
-    return parse_operators(ops, consts_block, op_in_types_block,
-                           outputs, output_index_map)
+def parse_block(block, outputs, output_index_map):
+    ops = parse_ops(block.nodes())
+    ret_name = get_input_names(block.returnNode())[0]
+    return parse_operators(ops, outputs, output_index_map, ret_name)
 
 
-def parse_loop(op_node, consts, op_in_types, outputs, output_index_map):
+def parse_loop(op_node, outputs, output_index_map):
 
     def get_input(index):
+        inode = op_node.inputsAt(index).node()
+        if inode.kind() == "prim::Constant":
+            return _expr.const(get_constant(inode))
         var_name = op_node.inputsAt(index).debugName()
-        if var_name in consts:
-            return _expr.const(consts[var_name])
         assert var_name in output_index_map
         output_ind = output_index_map[var_name]
         out = outputs[output_ind]
@@ -243,92 +235,147 @@ def parse_loop(op_node, consts, op_in_types, outputs, output_index_map):
     num_loop_var = len(list(op_node.inputs())) - 2
     init_vals = [get_input(i + 2) for i in range(num_loop_var)]
 
+    is_for_loop = isinstance(init_cond, _expr.Constant)
+
+    if is_for_loop:
+        loop_iter_dtype = "int32"
+        init_loop_iter_val = _expr.const(0, dtype="int32")
+    else:
+        loop_iter_dtype = "bool"
+        init_loop_iter_val = init_cond
+
     body_block = list(op_node.blocks())[0]
     inames = get_input_names(body_block)
-    loop_input_vals = [_expr.const(1), init_cond] + init_vals
-    update_outputs_from_pairs(zip(inames, loop_input_vals),
-                              outputs, output_index_map)
+    loop_input_vals = [init_loop_iter_val] + init_vals
+    name_val_pairs = list(zip(inames, loop_input_vals))
+    update_outputs_from_pairs(name_val_pairs, outputs, output_index_map)
+
+    def get_outputs(outputs, output_index_map, names):
+        return [wrap_const(outputs[output_index_map[name]])
+                for name in names]
 
     def cond(*current_vals):
         i = current_vals[0]
-        lhs = _op.greater_equal(i, _expr.const(1, 'int32'))
-        rhs = _op.less_equal(i, max_loop_count)
-        return _op.logical_and(lhs, rhs)
+
+        if is_for_loop:
+            return _op.less(i, max_loop_count)
+
+        return _op.equal(i, _expr.const(True, 'bool'))
 
     def body(*current_vals):
-        for (i, val) in enumerate(current_vals):
-            outputs[output_index_map[inames[i]]] = val
-        ret = parse_block(body_block, consts, op_in_types,
-                          outputs, output_index_map)
-        incr = _expr.const(1, 'int32')
-        return current_vals[0] + incr, ret
+        for (i, iname) in enumerate(inames):
+            outputs[output_index_map[iname]] = current_vals[i]
 
-    loop_count_var = _expr.var(inames[0], shape=(), dtype='int32')
-    loop_vars = [_expr.var(name) for name in inames[1:]]
-    loop = while_loop(cond, [loop_count_var] + loop_vars, body)
-    loop_val = loop(_expr.const(1), *init_vals)
-    return _expr.TupleGetItem(loop_val, 1)
+        parse_block(body_block, outputs, output_index_map)
+
+        block_output_names = get_output_names(body_block)
+        block_outputs = get_outputs(outputs, output_index_map,
+                                    block_output_names)
+        if is_for_loop:
+            incr = _expr.const(1, dtype="int32")
+            block_outputs[0] = current_vals[0] + incr
+
+        return block_outputs
+
+    def get_var(name, val):
+        if isinstance(val, _expr.Constant):
+            return _expr.var(name, shape=(), dtype=val.data.dtype)
+        return _expr.var(name)
+
+    loop_iter_var = _expr.var(inames[0], shape=(), dtype=loop_iter_dtype)
+    loop_vars = [get_var(name, val) for name, val in name_val_pairs[1:]]
+    loop = while_loop(cond, [loop_iter_var] + loop_vars, body)
+    loop_val = loop(init_loop_iter_val, *init_vals)
+
+    return [_expr.TupleGetItem(loop_val, i+1) for i in range(num_loop_var)]
 
 
-def parse_operators(operators, consts, op_in_types, outputs, output_index_map):
+def parse_operators(operators, outputs, output_index_map, ret_name):
     for node_name, op_node in operators.items():
         operator = op_node.kind()
-        output_index_map[node_name] = len(outputs)
         inputs = get_op_inputs(op_node, outputs, output_index_map)
 
         if operator == "prim::Constant":
-            outputs.append(consts[node_name])
+            output_index_map[node_name] = len(outputs)
+            outputs.append(get_constant(op_node))
         elif operator == 'prim::ListConstruct' and is_int_list(inputs):
+            output_index_map[node_name] = len(outputs)
             outputs.append(_expr.var(node_name, shape=inputs))
-        elif operator == 'prim::ListConstruct':
+        elif operator in ['prim::ListConstruct', 'prim::TupleConstruct']:
+            output_index_map[node_name] = len(outputs)
             outputs.append(inputs)
-        elif operator == "prim::ListUnpack":
-            update_outputs_from_pairs(zip(get_output_names(op_node), inputs[0]),
+        elif operator in ["prim::ListUnpack", 'prim::TupleUnpack']:
+            unpacked_names = get_output_names(op_node)
+            update_outputs_from_pairs(zip(unpacked_names, inputs[0]),
                                       outputs, output_index_map)
         elif operator == "prim::If":
             cond = outputs[output_index_map[op_node.inputsAt(0).debugName()]]
             blocks = list(op_node.blocks())
-            true_branch = parse_block(blocks[0], consts, op_in_types,
-                                      outputs, output_index_map)
-            false_branch = parse_block(blocks[1], consts, op_in_types,
-                                       outputs, output_index_map)
+            true_branch = parse_block(blocks[0], outputs, output_index_map)
+            false_branch = parse_block(blocks[1], outputs, output_index_map)
+            output_index_map[node_name] = len(outputs)
             outputs.append(_expr.If(cond, true_branch, false_branch))
         elif operator == "prim::Loop":
-            loop = parse_loop(op_node, consts, op_in_types,
-                              outputs, output_index_map)
-            outputs.append(loop)
+            loop = parse_loop(op_node, outputs, output_index_map)
+            unpacked_names = get_output_names(op_node)
+            assert len(loop) == len(unpacked_names)
+            update_outputs_from_pairs(zip(unpacked_names, loop),
+                                      outputs, output_index_map)
         else:
+            output_index_map[node_name] = len(outputs)
             relay_op = convert_map[operator]
-            outputs.append(relay_op(inputs, op_in_types[node_name]))
+            outputs.append(relay_op(inputs, get_input_types(op_node)))
 
-    return outputs[-1]
+    ret = outputs[output_index_map[ret_name]]
+    if isinstance(ret, list):
+        ret = _expr.Tuple(ret)
+    else:
+        ret = wrap_const(ret)
+    return ret
+
+
+def get_all_op_names(graph):
+    nodes = list(graph.nodes())
+    prim_with_blocks = ["prim::If", "prim::Loop"]
+    for prim in prim_with_blocks:
+        prim_nodes = graph.findAllNodes(prim, recurse=True)
+        for prim_node in prim_nodes:
+            for block in prim_node.blocks():
+                nodes += block.nodes()
+    return set([node.kind() for node in nodes])
+
+
+def report_missing_conversion(graph):
+    known_ops = ["prim::Constant", "prim::GetAttr",
+                 "prim::ListConstruct", "prim::ListUnpack",
+                 "prim::TupleConstruct", "prim::TupleUnpack",
+                 "prim::If", "prim::Loop"]
+    known_ops += list(convert_map.keys())
+    missing = [op_name for op_name in get_all_op_names(graph)
+               if op_name not in known_ops]
+
+    if missing:
+        msg = "The following operators are not implemented: {}".format(missing)
+        raise NotImplementedError(msg)
 
 
 def parse_script_module(script_module, input_shapes):
     graph = script_module.graph.copy()
     run_jit_passes(graph)
-    #print(graph, graph.code)
+    report_missing_conversion(graph)
 
     params = script_module.state_dict()
     input_vars = parse_inputs(graph.inputs(), input_shapes)
-    param_vars, tensors, packed_param_map = parse_params(graph, params)
-    consts, ops, op_in_types = parse_ops(graph.nodes())
+    param_vars, tensors = parse_params(graph, params)
 
     input_vars.update(param_vars)
     outputs = list(input_vars.values())
     output_index_map = dict(zip(input_vars.keys(), range(len(outputs))))
-    tvm_params = {k: tvm.nd.array(v) for k, v in tensors.items()}
+    ret_name = get_input_names(graph.return_node())[0]
 
-    if len(packed_param_map) > 0:  # quantized model
-        qnn_torch.add_input_quant_params_to_op_inputs(graph)
-        weight_quant_params = qnn_torch.get_weight_quant_params(params)
-        qnn_torch.add_quant_params_to_outputs(outputs, output_index_map,
-                                              packed_param_map,
-                                              weight_quant_params)
-        qnn_torch.add_quant_params(tvm_params, weight_quant_params)
-        convert_map.update(qnn_torch.convert_map)
-
-    body = parse_operators(ops, consts, op_in_types, outputs, output_index_map)
+    body = parse_operators(parse_ops(graph.nodes()), outputs,
+                           output_index_map, ret_name)
     func = tvm.relay.Function(_analysis.free_vars(body), body)
+    tvm_params = {k: tvm.nd.array(v) for k, v in tensors.items()}
 
     return _module.Module.from_expr(func), tvm_params
