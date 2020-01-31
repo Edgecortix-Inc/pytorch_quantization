@@ -1,4 +1,7 @@
+# This is taken from WIP PR by AWS
+
 import numpy as np
+
 import tvm
 
 from tvm.relay import expr as _expr
@@ -6,12 +9,31 @@ from tvm.relay import op as _op
 from tvm.relay.frontend.common import get_relay_op
 from tvm.relay.frontend.common import infer_shape as _infer_shape
 from tvm.relay.frontend.common import infer_value as _infer_value
+from tvm.relay.frontend.common import infer_type as _infer_type
+
+
+def wrap_const(c):
+    if not isinstance(c, _expr.Expr):
+        return _expr.const(c)
+    return c
+
+
+def cast_if_necessary(data, expected_type):
+    # This is a temporally solution. Need a better way of handling
+    # incomaptible types
+    if not isinstance(data, _expr.Constant):
+        return data
+    ty = _infer_type(data)
+    if ty.data.dtype == "int32" and expected_type == "float":
+        return _op.cast(data, expected_type)
+    return data
+
 
 # operator implementation
 def _elemwise(name):
     def _impl(inputs, input_types):
-        data0 = convert_input(inputs[0])
-        data1 = convert_input(inputs[1])
+        data0 = cast_if_necessary(wrap_const(inputs[0]), input_types[0])
+        data1 = cast_if_necessary(wrap_const(inputs[1]), input_types[1])
 
         if not isinstance(data0, (_expr.Call, _expr.TupleGetItem, _expr.Var)):
             temp = data0
@@ -65,25 +87,9 @@ def _slice():
 def _select():
     def _impl(inputs, input_types):
         data = inputs[0]
-        inferred_shape = _infer_shape(data)
-        end = []
-
-        for infer in inferred_shape:
-            end.append(int(infer))
-
-        begin = [0]*len(end)
-        dim = int(inputs[1])
-        index = int(inputs[2])
-
-        end[dim] = index+1
-        begin[dim] = index
-
-        strides = [1]*len(end)
-
-        sym = _op.transform.strided_slice(data, begin, end, strides)
-        axis = [dim]
-
-        return _op.transform.squeeze(sym, axis)
+        axis = int(inputs[1])
+        index = wrap_const(inputs[2])
+        return _op.transform.take(data, index, axis=axis)
     return _impl
 
 def _convert_data_type(input_type):
@@ -115,9 +121,9 @@ def _ones():
         else:
             shape = inputs[0].shape
 
-        fill_value = _get_fill_value(input_types)
+        fill_value = _get_fill_value(input_types, 1)
 
-        return get_relay_op('full')(fill_value, shape, dtype=_convert_data_type(input_types[0]))
+        return get_relay_op('full')(fill_value, shape, dtype="float32")
     return _impl
 
 def _zeros():
@@ -126,21 +132,22 @@ def _zeros():
             shape = _infer_shape(inputs[0])
         elif isinstance(inputs[0], (_expr.Call, _expr.TupleGetItem)):
             shape = _infer_shape(inputs[0])
+        elif isinstance(inputs[0], (list, tuple)):
+            shape = inputs[0]
         else:
             shape = inputs[0].shape
 
-        fill_value = _get_fill_value(input_types)
-
-        return _op.full(fill_value, shape, dtype=input_types[0])
+        fill_value = _get_fill_value(input_types, 0)
+        return _op.full(fill_value, shape, dtype="float32")
     return _impl
 
-def _get_fill_value(input_types):
+def _get_fill_value(input_types, int_val):
     if input_types[0] == 'int':
-        fill_value = _expr.const(1)
+        fill_value = _expr.const(int_val)
     elif input_types[0] == 'float':
-        fill_value = _expr.const(1.0)
+        fill_value = _expr.const(float(int_val))
     else:
-        fill_value = _expr.const(1.0)
+        fill_value = _expr.const(float(int_val))
 
     return fill_value
 
@@ -485,12 +492,11 @@ def _dense():
 
 def _size():
     def _impl(inputs, input_types):
-        axis = int(inputs[1])
-        if isinstance(inputs[0], _expr.Var):
-            shape = _infer_shape(inputs[0])
-        else:
-            shape = _infer_shape(inputs[0])
-        return shape[axis]
+        shape = _infer_shape(inputs[0])
+        if len(inputs) > 1:
+            axis = int(inputs[1])
+            return shape[axis]
+        return shape
     return _impl
 
 def _numtotensor():
@@ -568,7 +574,7 @@ def _dropout():
     return _impl
 
 def _reduce(name):
-    def _impl(inputs, attrs, params):
+    def _impl(inputs, attrs):
         data = inputs[0]
         return get_relay_op(name)(data)
     return _impl
@@ -576,10 +582,18 @@ def _reduce(name):
 def _mean():
     def _impl(inputs, input_types):
         data = inputs[0]
-        axis = _infer_shape(inputs[1])
-
-        keepdims = int(inputs[2])
-        exclude = inputs[3] is not None
+        if inputs[1]:
+            axis = _infer_shape(inputs[1])
+        else:
+            axis = None
+        if len(inputs) > 2 and inputs[2]:
+            keepdims = int(inputs[2])
+        else:
+            keepdims = False
+        if len(inputs) > 3 and inputs[3]:
+            exclude = int(inputs[3])
+        else:
+            exclude = False
 
         return _op.mean(data, axis, keepdims, exclude)
     return _impl
@@ -701,6 +715,7 @@ def _sqrt():
         return _op.tensor.sqrt(data)
     return _impl
 
+
 def _zeros_like():
     def _impl(inputs, input_types):
         data = inputs[0]
@@ -726,10 +741,12 @@ def _upsample(method):
         return _op.image.resize(data, out_size, "NCHW", "bilinear", coord_trans)
     return _impl
 
+
 def _identity():
     def _impl(inputs, input_types):
         return inputs[0]
     return _impl
+
 
 def _floor():
     def _impl(inputs, input_types):
@@ -738,22 +755,65 @@ def _floor():
     return _impl
 
 
-# Helper functions for operator implementation
+def _neg():
+    def _impl(inputs, input_types):
+        data = inputs[0]
+        return _op.tensor.negative(data)
+    return _impl
 
-def convert_input(data):
-    """ Handle input conversion for elemwise op """
-    if isinstance(data, (_expr.Call, _expr.TupleGetItem, _expr.Var)):
-        return data
-    elif isinstance(data, str):
-        if len(data) == 1:
-            return _expr.const(int(data), dtype='float32')
-        else:
-            if '.' in data:
-                return _expr.const(float(data[1:-1]), dtype='float32')
-            else:
-                return _expr.const(int(data[1:-1]), dtype='float32')
-    else:
-        return _expr.const(float(data), dtype='float32')
+
+def _tanh():
+    def _impl(inputs, input_types):
+        data = inputs[0]
+        return _op.tensor.tanh(data)
+    return _impl
+
+
+def _gt():
+    def _impl(inputs, input_types):
+        assert len(inputs) == 2
+        lhs = wrap_const(inputs[0])
+        rhs = wrap_const(inputs[1])
+        return _op.tensor.greater(lhs, rhs)
+    return _impl
+
+
+def _lt():
+    def _impl(inputs, input_types):
+        assert len(inputs) == 2
+        lhs = wrap_const(inputs[0])
+        rhs = wrap_const(inputs[1])
+        return _op.tensor.less(lhs, rhs)
+    return _impl
+
+
+def _Bool():
+    def _impl(inputs, input_types):
+        assert len(inputs) == 1
+        return inputs[0]
+    return _impl
+
+
+def _Float():
+    def _impl(inputs, input_types):
+        assert len(inputs) == 1
+        return _op.cast(inputs[0], "float")
+    return _impl
+
+
+def _stack():
+    def _impl(inputs, input_types):
+        print("stack input:", inputs)
+        return _op.tensor.stack(inputs[0], 0)
+    return _impl
+
+
+def _mm():
+    def _impl(inputs, input_types):
+        print("mm input:", inputs)
+        return _op.nn.dense(inputs[0], inputs[1])
+    return _impl
+
 
 # Operator mappings
 convert_map = {
@@ -817,5 +877,13 @@ convert_map = {
     'aten::zeros_like'                      : _zeros_like(),
     'aten::upsample_bilinear2d'             : _upsample("bilinear"),
     'aten::detach'                          : _identity(),
-    'aten::floor'                           : _floor()
+    'aten::floor'                           : _floor(),
+    'aten::lt'                              : _lt(),
+    'aten::gt'                              : _gt(),
+    'aten::Bool'                            : _Bool(),
+    'aten::Float'                           : _Float(),
+    'aten::neg'                             : _neg(),
+    'aten::tanh'                            : _tanh(),
+    'aten::stack'                           : _stack(),
+    'aten::mm'                              : _matmul(),
 }
