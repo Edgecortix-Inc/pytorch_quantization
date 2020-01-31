@@ -747,6 +747,7 @@ def _floor():
     def _impl(inputs, input_types):
         data = inputs[0]
         return get_relay_op("floor")(data)
+    return _impl
 
 
 def wrap_const(c):
@@ -866,7 +867,7 @@ convert_map = {
     'aten::zeros_like'                      : _zeros_like(),
     'aten::upsample_bilinear2d'             : _upsample("bilinear"),
     'aten::detach'                          : _identity(),
-    'aten::floor'                           : _floor()
+    'aten::floor'                           : _floor(),
     'aten::lt'                              : _lt(),
     'aten::gt'                              : _gt(),
     'aten::Bool'                            : _Bool(),
