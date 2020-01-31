@@ -9,6 +9,7 @@ from tvm.relay.loops import while_loop
 from tvm.relay import op as _op
 
 from relay_op_conversion import convert_map, wrap_const
+import qnn_torch
 
 
 def parse_inputs(graph_inputs, input_shapes):
@@ -94,6 +95,7 @@ def parse_params(graph, state_dict):
     getattr_nodes = graph.findAllNodes("prim::GetAttr", recurse=True)
     params = {}
     param_tensors = {}
+    packed_param_map = {}
     seen = set()
 
     for node in getattr_nodes:
@@ -106,14 +108,17 @@ def parse_params(graph, state_dict):
             full_attr = get_full_attr_name(getattrs)
             full_attr_node_name = get_output_name(getattrs[-1])
 
-            if full_attr in state_dict:
+            if full_attr.endswith("_packed_params"):  # for quantized models
+                assert full_attr in state_dict
+                packed_param_map[full_attr_node_name] = full_attr
+            elif full_attr in state_dict:
                 torch_tensor = state_dict[full_attr]
                 tensor, var = get_tensor_and_var(torch_tensor,
                                                  full_attr_node_name)
                 param_tensors[full_attr_node_name] = tensor
                 params[full_attr_node_name] = var
 
-    return params, param_tensors
+    return params, param_tensors, packed_param_map
 
 
 def get_input_types(op_node):
@@ -351,6 +356,7 @@ def report_missing_conversion(graph):
                  "prim::TupleConstruct", "prim::TupleUnpack",
                  "prim::If", "prim::Loop"]
     known_ops += list(convert_map.keys())
+    known_ops += list(qnn_torch.convert_map.keys())
     missing = [op_name for op_name in get_all_op_names(graph)
                if op_name not in known_ops]
 
@@ -366,16 +372,25 @@ def parse_script_module(script_module, input_shapes):
 
     params = script_module.state_dict()
     input_vars = parse_inputs(graph.inputs(), input_shapes)
-    param_vars, tensors = parse_params(graph, params)
+    param_vars, tensors, packed_param_map = parse_params(graph, params)
+    tvm_params = {k: tvm.nd.array(v) for k, v in tensors.items()}
 
     input_vars.update(param_vars)
     outputs = list(input_vars.values())
     output_index_map = dict(zip(input_vars.keys(), range(len(outputs))))
     ret_name = get_input_names(graph.return_node())[0]
 
+    if len(packed_param_map) > 0:  # quantized model
+        qnn_torch.add_input_quant_params_to_op_inputs(graph)
+        weight_quant_params = qnn_torch.get_weight_quant_params(params)
+        qnn_torch.add_quant_params_to_outputs(outputs, output_index_map,
+                                              packed_param_map,
+                                              weight_quant_params)
+        qnn_torch.add_quant_params(tvm_params, weight_quant_params)
+        convert_map.update(qnn_torch.convert_map)
+
     body = parse_operators(parse_ops(graph.nodes()), outputs,
                            output_index_map, ret_name)
     func = tvm.relay.Function(_analysis.free_vars(body), body)
-    tvm_params = {k: tvm.nd.array(v) for k, v in tensors.items()}
 
     return _module.Module.from_expr(func), tvm_params
