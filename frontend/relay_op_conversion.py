@@ -9,6 +9,7 @@ from tvm.relay import op as _op
 from tvm.relay.frontend.common import get_relay_op
 from tvm.relay.frontend.common import infer_shape as _infer_shape
 from tvm.relay.frontend.common import infer_value as _infer_value
+from tvm.relay.frontend.common import infer_type as _infer_type
 
 
 def wrap_const(c):
@@ -17,11 +18,22 @@ def wrap_const(c):
     return c
 
 
+def cast_if_necessary(data, expected_type):
+    # This is a temporally solution. Need a better way of handling
+    # incomaptible types
+    if not isinstance(data, _expr.Constant):
+        return data
+    ty = _infer_type(data)
+    if ty.data.dtype == "int32" and expected_type == "float":
+        return _op.cast(data, expected_type)
+    return data
+
+
 # operator implementation
 def _elemwise(name):
     def _impl(inputs, input_types):
-        data0 = wrap_const(inputs[0])
-        data1 = wrap_const(inputs[1])
+        data0 = cast_if_necessary(wrap_const(inputs[0]), input_types[0])
+        data1 = cast_if_necessary(wrap_const(inputs[1]), input_types[1])
 
         if not isinstance(data0, (_expr.Call, _expr.TupleGetItem, _expr.Var)):
             temp = data0
