@@ -67,12 +67,21 @@ def add_input_quant_params_to_op_inputs(graph):
     input_zero_point = quantize_node.inputsAt(2)
 
     needs_input_quant_param = ["quantized::conv2d", "quantized::conv2d_relu",
-                               "aten::dequantize", "quantized::linear",
-                               "quantized::add_relu"]
+                               "quantized::linear", "quantized::add_relu"]
     for node in graph.nodes():
         if node.kind() in needs_input_quant_param:
             node.addInput(input_scale)
             node.addInput(input_zero_point)
+
+    conv_node = graph.findNode("quantized::conv2d")
+    assert conv_node
+    output_scale = conv_node.inputsAt(6)
+    output_zero_point = conv_node.inputsAt(7)
+
+    print("output scale", output_scale)
+    for node in graph.findAllNodes("aten::dequantize"):
+        node.addInput(output_scale)
+        node.addInput(output_zero_point)
 
 
 def add_quant_params(params, quant_params):
@@ -92,6 +101,7 @@ def _dequantize():
     def _impl(inputs, input_type):
         inp_scale = _expr.const(inputs[1])
         inp_zero_point = _expr.const(inputs[2])
+        print("dequantize input scale", inp_scale)
         return relay.qnn.op.dequantize(inputs[0], inp_scale, inp_zero_point)
     return _impl
 
