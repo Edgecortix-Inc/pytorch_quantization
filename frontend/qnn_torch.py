@@ -4,6 +4,7 @@ import numpy as np
 from tvm import relay
 from tvm.relay import expr as _expr
 from tvm.relay.frontend.common import infer_shape
+
 from util import get_output_name
 
 
@@ -55,24 +56,56 @@ def add_quant_params_to_outputs(outputs, output_index_map,
         outputs.append((qweight, qparam.scale, qparam.zero_point))
 
 
+def get_quant_param_for_input(input_value):
+    output_quant_param_indices = {
+        "aten::quantize_per_tensor": (1, 2),
+        "quantized::conv2d": (6, 7),
+        "quantized::conv2d_relu": (6, 7),
+        "quantized::linear": (2, 3),
+        "quantized::add_relu": (2, 3)
+    }
+
+    def dfs(current_node):
+        # trace back to find the producer of this input value
+        current_op = current_node.kind()
+        if current_op in output_quant_param_indices:
+            indices = output_quant_param_indices[current_op]
+            scale = current_node.inputsAt(indices[0])
+            zp = current_node.inputsAt(indices[1])
+            return scale, zp
+        else:
+            # Assume quantized tensor comes earlier in the args
+            for arg in current_node.inputs():
+                return dfs(arg.node())
+
+        assert False, "No producer for %s" % (str(current_node))
+
+    return dfs(input_value.node())
+
+
 def get_input_quant_param_mapping(script_module, graph):
-    # quantize_op = 'aten::quantize_per_tensor'
-    # quantize_node = graph.findNode(quantize_op)
-    # assert quantize_node
-    # input_scale = quantize_node.inputsAt(1)
-    # input_zero_point = quantize_node.inputsAt(2)
+    num_quantized_inputs = {"quantized::conv2d": 1,
+                            "quantized::conv2d_relu": 1,
+                            "quantized::linear": 1,
+                            "quantized::add_relu": 2,
+                            "aten::dequantize": 1}
+    mapping = {}
+    for node in graph.nodes():
+        operator = node.kind()
+        if operator not in num_quantized_inputs:
+            continue
 
-    # conv_node = graph.findNode("quantized::conv2d")
-    # assert conv_node
-    # output_scale = conv_node.inputsAt(6)
-    # output_zero_point = conv_node.inputsAt(7)
+        node_name = get_output_name(node)
+        mapping[node_name] = {}
+        mapping[node_name]["input_scales"] = []
+        mapping[node_name]["input_zero_points"] = []
 
-    # print("output scale", output_scale)
-    # for node in graph.findAllNodes("aten::dequantize"):
-    #     node.addInput(output_scale)
-    #     node.addInput(output_zero_point)
+        for i in range(num_quantized_inputs[operator]):
+            scale, zp = get_quant_param_for_input(node.inputsAt(i))
+            mapping[node_name]["input_scales"].append(scale)
+            mapping[node_name]["input_zero_points"].append(zp)
 
-    return {}
+    return mapping
 
 
 def add_input_quant_params_to_op_inputs(script_module, graph):
@@ -81,15 +114,15 @@ def add_input_quant_params_to_op_inputs(script_module, graph):
     # To simplify the translation of inputs, we add input quant params
     # to inputs of PyTorch quantized operator nodes. See _impl in
     #  _quantized_conv2d() below for example of why this is helpful.
-
     param_mapping = get_input_quant_param_mapping(script_module, graph)
-    needs_input_quant_param = ["quantized::conv2d", "quantized::conv2d_relu",
-                               "quantized::linear", "quantized::add_relu"]
     for node in graph.nodes():
-        if node.kind() in needs_input_quant_param:
-            node_name = get_output_name(node)
-            node.addInput(param_mapping[node_name]["input_scale"])
-            node.addInput(param_mapping[node_name]["input_zero_point"])
+        node_name = get_output_name(node)
+        if node_name in param_mapping:
+            scales = param_mapping[node_name]["input_scales"]
+            zps = param_mapping[node_name]["input_zero_points"]
+            for scale, zp in zip(scales, zps):
+                node.addInput(scale)
+                node.addInput(zp)
 
 
 def add_quant_params(params, quant_params):
@@ -174,12 +207,14 @@ def _add(with_relu=False):
     def _impl(inputs, input_type):
         output_scale = _expr.const(inputs[2])
         output_zero_point = _expr.const(inputs[3])
-        assert len(inputs) == 6, "Input quant params not found in op inputs"
-        input_scale = _expr.const(inputs[4])
-        input_zero_point = _expr.const(inputs[5])
+        assert len(inputs) == 8, "Input quant params not found in op inputs"
+        input_scale_lhs = _expr.const(inputs[4])
+        input_zero_point_lhs = _expr.const(inputs[5])
+        input_scale_rhs = _expr.const(inputs[6])
+        input_zero_point_rhs = _expr.const(inputs[7])
         add = relay.qnn.op.add(inputs[0], inputs[1],
-                               input_scale, input_zero_point,
-                               input_scale, input_zero_point,
+                               input_scale_lhs, input_zero_point_lhs,
+                               input_scale_rhs, input_zero_point_rhs,
                                output_scale, output_zero_point)
         if with_relu:
             return relay.nn.relu(add)
