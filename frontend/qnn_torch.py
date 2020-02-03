@@ -4,6 +4,7 @@ import numpy as np
 from tvm import relay
 from tvm.relay import expr as _expr
 from tvm.relay.frontend.common import infer_shape
+from util import get_output_name
 
 
 class QuantParam:
@@ -54,34 +55,41 @@ def add_quant_params_to_outputs(outputs, output_index_map,
         outputs.append((qweight, qparam.scale, qparam.zero_point))
 
 
-def add_input_quant_params_to_op_inputs(graph):
+def get_input_quant_param_mapping(script_module, graph):
+    # quantize_op = 'aten::quantize_per_tensor'
+    # quantize_node = graph.findNode(quantize_op)
+    # assert quantize_node
+    # input_scale = quantize_node.inputsAt(1)
+    # input_zero_point = quantize_node.inputsAt(2)
+
+    # conv_node = graph.findNode("quantized::conv2d")
+    # assert conv_node
+    # output_scale = conv_node.inputsAt(6)
+    # output_zero_point = conv_node.inputsAt(7)
+
+    # print("output scale", output_scale)
+    # for node in graph.findAllNodes("aten::dequantize"):
+    #     node.addInput(output_scale)
+    #     node.addInput(output_zero_point)
+
+    return {}
+
+
+def add_input_quant_params_to_op_inputs(script_module, graph):
     # Quantized operators in PyTorch do not take input quant params as
     # arguments. But QNN expects them to be passed in as arguements.
     # To simplify the translation of inputs, we add input quant params
     # to inputs of PyTorch quantized operator nodes. See _impl in
     #  _quantized_conv2d() below for example of why this is helpful.
-    quantize_op = 'aten::quantize_per_tensor'
-    quantize_node = graph.findNode(quantize_op)
-    assert quantize_node
-    input_scale = quantize_node.inputsAt(1)
-    input_zero_point = quantize_node.inputsAt(2)
 
+    param_mapping = get_input_quant_param_mapping(script_module, graph)
     needs_input_quant_param = ["quantized::conv2d", "quantized::conv2d_relu",
                                "quantized::linear", "quantized::add_relu"]
     for node in graph.nodes():
         if node.kind() in needs_input_quant_param:
-            node.addInput(input_scale)
-            node.addInput(input_zero_point)
-
-    conv_node = graph.findNode("quantized::conv2d")
-    assert conv_node
-    output_scale = conv_node.inputsAt(6)
-    output_zero_point = conv_node.inputsAt(7)
-
-    print("output scale", output_scale)
-    for node in graph.findAllNodes("aten::dequantize"):
-        node.addInput(output_scale)
-        node.addInput(output_zero_point)
+            node_name = get_output_name(node)
+            node.addInput(param_mapping[node_name]["input_scale"])
+            node.addInput(param_mapping[node_name]["input_zero_point"])
 
 
 def add_quant_params(params, quant_params):
