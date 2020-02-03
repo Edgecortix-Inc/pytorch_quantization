@@ -127,6 +127,8 @@ def _quantized_conv2d(with_relu=False):
         input_scale = _expr.const(inputs[8])
         input_zero_point = _expr.const(inputs[9])
 
+        requant_input_scale = _expr.const(inputs[8] * np.asscalar(inputs[1][1].data.asnumpy()))
+
         # print("input_scale, input_zero_point:", input_scale, input_zero_point)
         # print("weight_scale, weight_zero_point:", weight_scale, weight_zero_point)
         # print("output_scale, output_zero_point:", output_scale, output_zero_point)
@@ -148,7 +150,7 @@ def _quantized_conv2d(with_relu=False):
                                        padding=padding, groups=groups)
 
         requantized = relay.qnn.op.requantize(conv_out,
-                                              input_scale, input_zero_point,
+                                              requant_input_scale, _expr.const(0, "int32"),
                                               output_scale, output_zero_point,
                                               out_dtype="uint8",
                                               axis=1)
