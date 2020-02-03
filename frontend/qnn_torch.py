@@ -102,6 +102,9 @@ def get_input_quant_param_mapping(script_module, graph):
 
         for i in range(num_quantized_inputs[operator]):
             scale, zp = get_quant_param_for_input(node.inputsAt(i))
+            # print("\nquant param for the node ", node_name)
+            # print(scale)
+            # print(zp)
             mapping[node_name]["input_scales"].append(scale)
             mapping[node_name]["input_zero_points"].append(zp)
 
@@ -142,7 +145,6 @@ def _dequantize():
     def _impl(inputs, input_type):
         inp_scale = _expr.const(inputs[1])
         inp_zero_point = _expr.const(inputs[2])
-        print("dequantize input scale", inp_scale)
         return relay.qnn.op.dequantize(inputs[0], inp_scale, inp_zero_point)
     return _impl
 
@@ -235,11 +237,14 @@ def _linear():
         input_scale = _expr.const(inputs[4])
         input_zero_point = _expr.const(inputs[5])
 
+        requant_input_scale = _expr.const(inputs[4] *
+                                          np.asscalar(inputs[1][1].data.asnumpy()))
+
         dense = relay.qnn.op.dense(inputs[0], weight,
                                    input_zero_point, weight_zero_point,
                                    input_scale, weight_scale)
         requantized = relay.qnn.op.requantize(dense,
-                                              input_scale, input_zero_point,
+                                              requant_input_scale, relay.const(0, 'int32'),
                                               output_scale, output_zero_point,
                                               out_dtype="uint8",
                                               axis=1)
