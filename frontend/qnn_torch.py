@@ -3,17 +3,26 @@ import tvm
 import numpy as np
 from tvm import relay
 from tvm.relay import expr as _expr
+from tvm.relay import op as _op
 from tvm.relay.frontend.common import infer_shape
 
 from util import get_output_name
 
 
 class QuantParam:
-    def __init__(self, weight, scale, zero_point, param_key):
+    def __init__(self, weight, bias, scale, zero_point, param_key):
         param_prefix = param_key[:-len("._packed_params")]
         self.weight_var = _expr.var(param_prefix + "_weight",
                                     shape=weight.shape)
         self.weight = weight
+        self.bias = bias
+
+        if bias is not None:
+            self.bias_var = _expr.var(param_prefix + "_bias",
+                                      shape=bias.shape)
+        else:
+            self.bias_var = None
+
         self.scale = _expr.const(np.asscalar(scale))
         self.zero_point = _expr.const(np.asscalar(zero_point),
                                       dtype="int32")
@@ -30,11 +39,11 @@ def unpack_quant_params(param_name, packed_params):
     if qweight.qscheme() == torch.per_tensor_affine:
         scale = np.array([qweight.q_scale()])
         zero_point = np.array([qweight.q_zero_point()], dtype="int32")
-        param = QuantParam(weight, scale, zero_point, param_name)
+        param = QuantParam(weight, bias.detach().numpy(), scale, zero_point, param_name)
     else:
         scales = qweight.q_per_channel_scales().numpy()
         zero_points = qweight.q_per_channel_zero_points().numpy()
-        param = QuantParam(weight, scales, zero_points, param_name)
+        param = QuantParam(weight, bias.detach().numpy(), scales, zero_points, param_name)
 
     return param
 
@@ -54,7 +63,8 @@ def add_quant_params_to_outputs(outputs, output_index_map,
         output_index_map[node_name] = len(outputs)
         qweight = relay.qnn.op.quantize(qparam.weight_var, qparam.scale,
                                         qparam.zero_point, out_dtype="int8")
-        outputs.append((qweight, qparam.scale, qparam.zero_point))
+        bias = qparam.bias_var
+        outputs.append((qweight, qparam.scale, qparam.zero_point, bias))
 
 
 def get_quant_param_for_input(input_value):
@@ -132,6 +142,8 @@ def add_input_quant_params_to_op_inputs(graph):
 def add_quant_params(params, quant_params):
     for qparam in quant_params.values():
         params[qparam.weight_var.name_hint] = tvm.nd.array(qparam.weight)
+        if qparam.bias is not None:
+            params[qparam.bias_var.name_hint] = tvm.nd.array(qparam.bias)
 
 
 def _quantize_per_tensor():
@@ -154,7 +166,7 @@ def _quantized_conv2d(with_relu=False):
     def _impl(inputs, input_type):
         # refer to src/ATen/native/quantized/cpu/qconv.cpp
         # inputs[0]: input tensor
-        # inputs[1]: (weight, scale, zero_point)
+        # inputs[1]: (weight, scale, zero_point, bias)
         # inputs[2-5]: stride, padding, dilation, groups
         # inputs[6]: output_scale
         # inputs[7]: output_zero_point
@@ -171,6 +183,7 @@ def _quantized_conv2d(with_relu=False):
         input_scale = _expr.const(inputs[8])
         input_zero_point = _expr.const(inputs[9])
 
+        # input scale * weight scale
         requant_input_scale = _expr.const(inputs[8] * np.asscalar(inputs[1][1].data.asnumpy()))
 
         print("input_scale, input_zero_point:", input_scale, input_zero_point)
@@ -193,7 +206,16 @@ def _quantized_conv2d(with_relu=False):
                                        dilation=dilation, strides=strides,
                                        padding=padding, groups=groups)
 
-        requantized = relay.qnn.op.requantize(conv_out,
+        bias_var = inputs[1][3]
+        if bias_var is not None:
+            fp32_out = _op.cast(conv_out, "float32")
+            bias_scaled = _op.tensor.divide(bias_var, requant_input_scale)
+            bias_result = _op.nn.bias_add(fp32_out, bias_scaled)
+            conv_res = _op.cast(_op.tensor.round(bias_result), "int32")
+        else:
+            conv_res = conv_out
+
+        requantized = relay.qnn.op.requantize(conv_res,
                                               requant_input_scale, _expr.const(0, "int32"),
                                               output_scale, output_zero_point,
                                               out_dtype="uint8",
