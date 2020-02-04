@@ -34,16 +34,17 @@ def unpack_quant_params(param_name, packed_params):
     else:
         qweight, bias = torch.ops.quantized.conv2d_unpack(packed_params)
 
-    weight = qweight.dequantize().numpy()
-    print("bias:", bias)
+    weight_np = qweight.dequantize().numpy()
+    bias_np = bias.detach().numpy()
+
     if qweight.qscheme() == torch.per_tensor_affine:
         scale = np.array([qweight.q_scale()])
         zero_point = np.array([qweight.q_zero_point()], dtype="int32")
-        param = QuantParam(weight, bias.detach().numpy(), scale, zero_point, param_name)
+        param = QuantParam(weight_np, bias_np, scale, zero_point, param_name)
     else:
         scales = qweight.q_per_channel_scales().numpy()
         zero_points = qweight.q_per_channel_zero_points().numpy()
-        param = QuantParam(weight, bias.detach().numpy(), scales, zero_points, param_name)
+        param = QuantParam(weight_np, bias_np, scales, zero_points, param_name)
 
     return param
 
@@ -63,8 +64,8 @@ def add_quant_params_to_outputs(outputs, output_index_map,
         output_index_map[node_name] = len(outputs)
         qweight = relay.qnn.op.quantize(qparam.weight_var, qparam.scale,
                                         qparam.zero_point, out_dtype="int8")
-        bias = qparam.bias_var
-        outputs.append((qweight, qparam.scale, qparam.zero_point, bias))
+        param_tup = (qweight, qparam.scale, qparam.zero_point, qparam.bias_var)
+        outputs.append(param_tup)
 
 
 def get_quant_param_for_input(input_value):
@@ -162,6 +163,10 @@ def _dequantize():
     return _impl
 
 
+def get_scalar(relay_const_scalar):
+    return np.asscalar(relay_const_scalar.data.asnumpy())
+
+
 def _quantized_conv2d(with_relu=False):
     def _impl(inputs, input_type):
         # refer to src/ATen/native/quantized/cpu/qconv.cpp
@@ -183,12 +188,9 @@ def _quantized_conv2d(with_relu=False):
         input_scale = _expr.const(inputs[8])
         input_zero_point = _expr.const(inputs[9])
 
-        # input scale * weight scale
-        requant_input_scale = _expr.const(inputs[8] * np.asscalar(inputs[1][1].data.asnumpy()))
-
-        print("input_scale, input_zero_point:", input_scale, input_zero_point)
-        #print("weight_scale, weight_zero_point:", weight_scale, weight_zero_point)
-        print("output_scale, output_zero_point:", output_scale, output_zero_point)
+        # print("input_scale, input_zero_point:", input_scale, input_zero_point)
+        # print("weight_scale, weight_zero_point:", weight_scale, weight_zero_point)
+        # print("output_scale, output_zero_point:", output_scale, output_zero_point)
 
         strides, padding, dilation = inputs[2], inputs[3], inputs[4]
         strides = infer_shape(inputs[2])
@@ -206,7 +208,10 @@ def _quantized_conv2d(with_relu=False):
                                        dilation=dilation, strides=strides,
                                        padding=padding, groups=groups)
 
+        # input scale * weight scale
+        requant_input_scale = _expr.const(inputs[8] * get_scalar(weight_scale))
         bias_var = inputs[1][3]
+
         if bias_var is not None:
             fp32_out = _op.cast(conv_out, "float32")
             bias_scaled = _op.tensor.divide(bias_var, requant_input_scale)
@@ -216,12 +221,14 @@ def _quantized_conv2d(with_relu=False):
             conv_res = conv_out
 
         requantized = relay.qnn.op.requantize(conv_res,
-                                              requant_input_scale, _expr.const(0, "int32"),
+                                              requant_input_scale,
+                                              _expr.const(0, "int32"),
                                               output_scale, output_zero_point,
                                               out_dtype="uint8",
                                               axis=1)
         if with_relu:
             return relay.nn.relu(requantized)
+            # return _op.tensor.clip(requantized, get_scalar(output_zero_point), 255.)
 
         return requantized
 
@@ -260,14 +267,24 @@ def _linear():
         input_scale = _expr.const(inputs[4])
         input_zero_point = _expr.const(inputs[5])
 
-        requant_input_scale = _expr.const(inputs[4] *
-                                          np.asscalar(inputs[1][1].data.asnumpy()))
-
         dense = relay.qnn.op.dense(inputs[0], weight,
                                    input_zero_point, weight_zero_point,
                                    input_scale, weight_scale)
-        requantized = relay.qnn.op.requantize(dense,
-                                              requant_input_scale, relay.const(0, 'int32'),
+
+        requant_input_scale = _expr.const(inputs[4] * get_scalar(weight_scale))
+        bias_var = inputs[1][3]
+
+        if bias_var is not None:
+            fp32_out = _op.cast(dense, "float32")
+            bias_scaled = _op.tensor.divide(bias_var, requant_input_scale)
+            bias_result = _op.nn.bias_add(fp32_out, bias_scaled)
+            dense_res = _op.cast(_op.tensor.round(bias_result), "int32")
+        else:
+            dense_res = dense
+
+        requantized = relay.qnn.op.requantize(dense_res,
+                                              requant_input_scale,
+                                              relay.const(0, 'int32'),
                                               output_scale, output_zero_point,
                                               out_dtype="uint8",
                                               axis=1)
