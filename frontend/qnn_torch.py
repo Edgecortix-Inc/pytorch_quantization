@@ -26,6 +26,7 @@ def unpack_quant_params(param_name, packed_params):
         qweight, bias = torch.ops.quantized.conv2d_unpack(packed_params)
 
     weight = qweight.dequantize().numpy()
+    print("bias:", bias)
     if qweight.qscheme() == torch.per_tensor_affine:
         scale = np.array([qweight.q_scale()])
         zero_point = np.array([qweight.q_zero_point()], dtype="int32")
@@ -52,7 +53,7 @@ def add_quant_params_to_outputs(outputs, output_index_map,
         qparam = quant_params[packed_param_name]
         output_index_map[node_name] = len(outputs)
         qweight = relay.qnn.op.quantize(qparam.weight_var, qparam.scale,
-                                        qparam.zero_point, out_dtype="uint8")
+                                        qparam.zero_point, out_dtype="int8")
         outputs.append((qweight, qparam.scale, qparam.zero_point))
 
 
@@ -83,7 +84,7 @@ def get_quant_param_for_input(input_value):
     return dfs(input_value.node())
 
 
-def get_input_quant_param_mapping(script_module, graph):
+def get_input_quant_param_mapping(graph):
     num_quantized_inputs = {"quantized::conv2d": 1,
                             "quantized::conv2d_relu": 1,
                             "quantized::linear": 1,
@@ -111,13 +112,13 @@ def get_input_quant_param_mapping(script_module, graph):
     return mapping
 
 
-def add_input_quant_params_to_op_inputs(script_module, graph):
+def add_input_quant_params_to_op_inputs(graph):
     # Quantized operators in PyTorch do not take input quant params as
     # arguments. But QNN expects them to be passed in as arguements.
     # To simplify the translation of inputs, we add input quant params
     # to inputs of PyTorch quantized operator nodes. See _impl in
     #  _quantized_conv2d() below for example of why this is helpful.
-    param_mapping = get_input_quant_param_mapping(script_module, graph)
+    param_mapping = get_input_quant_param_mapping(graph)
     for node in graph.nodes():
         node_name = get_output_name(node)
         if node_name in param_mapping:
@@ -172,9 +173,9 @@ def _quantized_conv2d(with_relu=False):
 
         requant_input_scale = _expr.const(inputs[8] * np.asscalar(inputs[1][1].data.asnumpy()))
 
-        # print("input_scale, input_zero_point:", input_scale, input_zero_point)
-        # print("weight_scale, weight_zero_point:", weight_scale, weight_zero_point)
-        # print("output_scale, output_zero_point:", output_scale, output_zero_point)
+        print("input_scale, input_zero_point:", input_scale, input_zero_point)
+        #print("weight_scale, weight_zero_point:", weight_scale, weight_zero_point)
+        print("output_scale, output_zero_point:", output_scale, output_zero_point)
 
         strides, padding, dilation = inputs[2], inputs[3], inputs[4]
         strides = infer_shape(inputs[2])
