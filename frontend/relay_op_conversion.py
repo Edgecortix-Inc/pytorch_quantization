@@ -606,7 +606,10 @@ def _mean():
             return _op.mean(x, axis, keepdims, exclude)
 
         if input_types[0] == "quint8":
-            return qnn_torch.quantized_mean(data, func)
+            input_scale = _expr.const(inputs[4])
+            input_zero_point = _expr.const(inputs[5])
+            return qnn_torch.quantized_mean(data, input_scale,
+                                            input_zero_point, func)
 
         return func(data)
 

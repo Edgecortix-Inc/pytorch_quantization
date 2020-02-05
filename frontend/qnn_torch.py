@@ -157,10 +157,11 @@ def quantized_adaptive_avg_2d(data, func):
     return _op.cast(out, "uint8")
 
 
-def quantized_mean(data, func):
-    # dequantized = relay.qnn.op.dequantize(data,
-    # relay.qnn.op.quantize( out_dtype="int8")
-    return func(data)
+def quantized_mean(data, input_scale, input_zero_point, func):
+    dequantized = relay.qnn.op.dequantize(data, input_scale, input_zero_point)
+    out = func(dequantized)
+    return relay.qnn.op.quantize(out, input_scale, input_zero_point,
+                                 out_dtype="uint8", axis=1)
 
 
 def _quantize_per_tensor():
