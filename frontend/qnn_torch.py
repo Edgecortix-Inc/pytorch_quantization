@@ -76,7 +76,8 @@ def get_quant_param_for_input(input_value):
         "quantized::conv2d_relu": (6, 7),
         "quantized::linear": (2, 3),
         "quantized::add_relu": (2, 3),
-        "quantized::add": (2, 3)
+        "quantized::add": (2, 3),
+        "quantized::cat": (2, 3)
     }
 
     def dfs(current_node):
@@ -105,10 +106,13 @@ def get_input_quant_param_mapping(graph):
                             "quantized::add": 2,
                             "aten::dequantize": 1,
                             "aten::mean": 1}
+    need_input_quant_param = set(num_quantized_inputs.keys())
+    need_input_quant_param.add("quantized::cat")
+
     mapping = {}
     for node in graph.nodes():
         operator = node.kind()
-        if operator not in num_quantized_inputs:
+        if operator not in need_input_quant_param:
             continue
 
         node_name = get_output_name(node)
@@ -116,13 +120,23 @@ def get_input_quant_param_mapping(graph):
         mapping[node_name]["input_scales"] = []
         mapping[node_name]["input_zero_points"] = []
 
-        for i in range(num_quantized_inputs[operator]):
-            scale, zp = get_quant_param_for_input(node.inputsAt(i))
-            # print("\nquant param for the node ", node_name)
-            # print(scale)
-            # print(zp)
-            mapping[node_name]["input_scales"].append(scale)
-            mapping[node_name]["input_zero_points"].append(zp)
+        if operator == "quantized::cat":
+            inputs = node.inputsAt(0).node().inputs()
+            for inp in inputs:
+                scale, zp = get_quant_param_for_input(inp)
+                mapping[node_name]["input_scales"].append(scale)
+                mapping[node_name]["input_zero_points"].append(zp)
+            # print("\nquant param for the cat node ", node_name)
+            # print(mapping[node_name]["input_scales"])
+            # print(mapping[node_name]["input_zero_points"])
+        else:
+            for i in range(num_quantized_inputs[operator]):
+                scale, zp = get_quant_param_for_input(node.inputsAt(i))
+                # print("\nquant param for the node ", node_name)
+                # print(scale)
+                # print(zp)
+                mapping[node_name]["input_scales"].append(scale)
+                mapping[node_name]["input_zero_points"].append(zp)
 
     return mapping
 
@@ -305,6 +319,25 @@ def _linear():
     return _impl
 
 
+def _cat():
+    def _impl(inputs, input_type):
+        axis = inputs[1]
+        output_scale = _expr.const(inputs[2])
+        output_zero_point = _expr.const(inputs[3])
+        input_scales = []
+        input_zero_points = []
+        num_inputs = (len(inputs) - 4) // 2
+
+        for i in range(0, num_inputs):
+            input_scales.append(_expr.const(inputs[4+i*2]))
+            input_zero_points.append(_expr.const(inputs[4+i*2+1]))
+
+        return relay.qnn.op.concatenate(inputs[0],
+                                        input_scales, input_zero_points,
+                                        output_scale, output_zero_point, axis)
+    return _impl
+
+
 convert_map = {
     'aten::quantize_per_tensor': _quantize_per_tensor(),
     'quantized::conv2d_relu': _quantized_conv2d(True),
@@ -312,5 +345,6 @@ convert_map = {
     'quantized::conv2d': _quantized_conv2d(),
     'quantized::add_relu': _add(True),
     'quantized::add': _add(),
-    'quantized::linear': _linear()
+    'quantized::linear': _linear(),
+    'quantized::cat': _cat()
 }

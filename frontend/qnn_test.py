@@ -6,6 +6,9 @@ import torch
 
 from torchvision.models.quantization import resnet as qresnet
 from torchvision.models.quantization import mobilenet as qmobilenet
+from torchvision.models.quantization import inception as qinception
+from torchvision.models.quantization import googlenet as qgooglenet
+# from torchvision.models.quantization import shufflenetv2 as qshufflenetv2
 
 
 from torch_frontend import parse_script_module
@@ -41,7 +44,9 @@ def quantize_model(model, inp, per_channel=False, dummy=True):
 
 qmodels = [
     ("resnet18", qresnet.resnet18(pretrained=True).eval()),
-    ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval())
+    ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
+    ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
+    ("googlenet", qgooglenet(pretrained=True).eval()),
 ]
 
 results = []
@@ -72,14 +77,17 @@ for (model_name, raw_model) in qmodels:
     # np.allclose(tvm_result, pt_result)
     max_abs_diff = np.max(np.abs(tvm_result - pt_result))
     mean_abs_diff = np.mean(np.abs(tvm_result - pt_result))
-    print("max abs diff %f, mean abs diff %f" % (max_abs_diff, mean_abs_diff))
-    print("%d in %d values correct." % (np.sum(tvm_result == pt_result), 1000))
+    num_correct = np.sum(tvm_result == pt_result)
 
     top1_tvm, top5_tvm = eval_accuracy(wrap_tvm_model(runtime, input_name))
 
-    results.append((model_name, top1_pt, top5_pt, top1_tvm, top5_tvm))
+    res = (model_name, num_correct, max_abs_diff, mean_abs_diff, top1_pt, top5_pt, top1_tvm, top5_tvm)
+    results.append(res)
 
-for (model_name, top1_pt, top5_pt, top1_tvm, top5_tvm) in results:
+for (model_name, num_correct, max_abs_diff, mean_abs_diff, top1_pt, top5_pt, top1_tvm, top5_tvm) in results:
     print("\nModel name: %s" % model_name)
     print("PyTorch accuracy: Top1 = %2.2f, Top5 = %2.2f" % (top1_pt.avg, top5_pt.avg))
     print("TVM accuracy: Top1 = %2.2f, Top5 = %2.2f" % (top1_tvm.avg, top5_tvm.avg))
+    print("max abs diff:", max_abs_diff)
+    print("mean_abs_diff:", mean_abs_diff)
+    print("%d in 1000 values correct." % (num_correct, 1000))
