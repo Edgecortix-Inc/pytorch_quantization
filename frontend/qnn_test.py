@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import tvm
 from tvm import relay
@@ -8,7 +9,8 @@ from torch.quantization import default_qconfig
 from torchvision.models.quantization import resnet as qresnet
 
 from torch_frontend import parse_script_module
-from eval_imagenet_1k import get_train_loader, eval_accuracy, wrap_tvm_model
+from eval_imagenet_1k import eval_accuracy, wrap_tvm_model
+from eval_imagenet_1k import get_train_loader, download_imagenet_1k
 
 
 def quantize_model(model, inp, per_channel=False, dummy=True):
@@ -22,8 +24,13 @@ def quantize_model(model, inp, per_channel=False, dummy=True):
     if dummy:
         model(inp)
     else:
-        print("Calibrating on real data...")
-        for image, _ in get_train_loader("imagenet_1k"):
+        data_root = "."
+        data_dir = "imagenet_1k"
+        if not os.path.exists(os.path.join(data_root, data_dir)):
+            download_imagenet_1k(data_root)
+
+        print("\nCalibrating on real data...")
+        for image, _ in get_train_loader(data_dir):
             model(image)
         print("Done.")
 
