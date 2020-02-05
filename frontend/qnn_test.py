@@ -2,16 +2,16 @@ import numpy as np
 import tvm
 from tvm import relay
 import torch
+from torch.quantization import QuantStub, DeQuantStub
+from torch.quantization import default_qconfig
+
 from torchvision.models.quantization import resnet as qresnet
 
 from torch_frontend import parse_script_module
+from eval_imagenet_1k import get_train_loader, eval_accuracy, wrap_tvm_model
 
 
-from torch.quantization import QuantStub, DeQuantStub, QuantWrapper
-from torch.quantization import default_qconfig, quantize, default_eval_fn
-
-
-def quantize_model(model, inp, per_channel=False):
+def quantize_model(model, inp, per_channel=False, dummy=True):
     if per_channel:
         model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
     else:
@@ -19,7 +19,14 @@ def quantize_model(model, inp, per_channel=False):
 
     model.fuse_model()
     torch.quantization.prepare(model, inplace=True)
-    model(inp)
+    if dummy:
+        model(inp)
+    else:
+        print("Calibrating on real data...")
+        for image, _ in get_train_loader("imagenet_1k"):
+            model(image)
+        print("Done.")
+
     torch.quantization.convert(model, inplace=True)
 
 
@@ -41,10 +48,10 @@ class AnnotatedConvModel(torch.nn.Module):
         pass
 
 
-inp = torch.abs(torch.rand(1, 3, 224, 224, dtype=torch.float))
-tvm_inp = inp.numpy().copy()
 input_name = 'X'
 input_shapes = {input_name: (1, 3, 224, 224)}
+inp = torch.abs(torch.rand(input_shapes[input_name], dtype=torch.float))
+tvm_inp = inp.numpy().copy()
 
 qmodels = [
     # AnnotatedConvModel().eval()
@@ -52,21 +59,30 @@ qmodels = [
 ]
 
 for raw_model in qmodels:
-    quantize_model(raw_model, inp)
+    quantize_model(raw_model, inp, dummy=False)
     script_module = torch.jit.trace(raw_model, inp).eval()
     mod, params = parse_script_module(script_module, input_shapes)
 
     with torch.no_grad():
         pt_result = script_module(inp).numpy()
+        top1_pt, top5_pt = eval_accuracy(script_module)
 
     with relay.build_config(opt_level=3):
         json, lib, params = relay.build(mod, target="llvm", params=params)
 
     runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context("cpu", 0))
     runtime.set_input(**params)
-    runtime.set_input("X", tvm_inp)
+    runtime.set_input(input_name, tvm_inp)
     runtime.run()
     tvm_result = runtime.get_output(0).asnumpy()
-    np.allclose(tvm_result, pt_result)
-    print("tvm vs torch max abs diff %s, mean abs diff %f" % (np.max(np.abs(tvm_result - pt_result)), np.mean(np.abs(tvm_result - pt_result))))
-    print("%d in 1000 values correct." % np.sum(tvm_result == pt_result))
+
+    # np.allclose(tvm_result, pt_result)
+    max_abs_diff = np.max(np.abs(tvm_result - pt_result))
+    mean_abs_diff = np.mean(np.abs(tvm_result - pt_result))
+    print("max abs diff %f, mean abs diff %f" % (max_abs_diff, mean_abs_diff))
+    print("%d in %d values correct." % (np.sum(tvm_result == pt_result), 1000))
+
+    top1_tvm, top5_tvm = eval_accuracy(wrap_tvm_model(runtime, input_name))
+
+    print("\nPyTorch accuracy: Top1 = %2.2f, Top5 = %2.2f" % (top1_pt.avg, top5_pt.avg))
+    print("TVM accuracy: Top1 = %2.2f, Top5 = %2.2f" % (top1_tvm.avg, top5_tvm.avg))

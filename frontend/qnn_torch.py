@@ -214,8 +214,8 @@ def _quantized_conv2d(with_relu=False):
 
         if bias_var is not None:
             qbias = relay.qnn.op.quantize(bias_var, requant_input_scale,
-                                          _expr.const(0, "int32")
-                                          , out_dtype="int32")
+                                          _expr.const(0, "int32"),
+                                          out_dtype="int32")
             conv_res = _op.nn.bias_add(conv_out, qbias)
         else:
             conv_res = conv_out
