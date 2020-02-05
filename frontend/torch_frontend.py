@@ -9,6 +9,8 @@ from tvm.relay.loops import while_loop
 from tvm.relay import op as _op
 
 from relay_op_conversion import convert_map, wrap_const
+from util import get_output_name
+
 import qnn_torch
 
 
@@ -37,11 +39,6 @@ def get_tensor_and_var(torch_tensor, name):
     tensor = tvm.nd.array(torch_tensor.cpu().numpy())
     var = _expr.var(name, shape=tensor.shape)
     return tensor, var
-
-
-def get_output_name(node):
-    assert node.outputsSize() == 1
-    return node.output().debugName()
 
 
 def get_output_names(node):
