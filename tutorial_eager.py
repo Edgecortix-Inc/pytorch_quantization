@@ -1,19 +1,16 @@
 # Originally from https://pytorch.org/tutorials/advanced/static_quantization_tutorial.html
 
-import numpy as np
 import torch
 import torch.nn as nn
-import torchvision
-from torch.utils.data import DataLoader
-from torchvision import datasets
-import torchvision.transforms as transforms
 import os
-import time
-import sys
+import warnings
 import torch.quantization
+from torch.quantization import QuantStub, DeQuantStub
+
+from frontend.eval_imagenet_1k import eval_accuracy, get_train_loader
+
 
 # # Setup warnings
-import warnings
 warnings.filterwarnings(
     action='ignore',
     category=DeprecationWarning,
@@ -27,7 +24,6 @@ warnings.filterwarnings(
 # Specify random seed for repeatable results
 torch.manual_seed(191009)
 
-from torch.quantization import QuantStub, DeQuantStub
 
 def _make_divisible(v, divisor, min_value=None):
     if min_value is None:
@@ -172,65 +168,6 @@ class MobileNetV2(nn.Module):
                     if type(m.conv[idx]) == nn.Conv2d:
                         torch.quantization.fuse_modules(m.conv, [str(idx), str(idx + 1)], inplace=True)
 
-class AverageMeter(object):
-    """Computes and stores the average and current value"""
-    def __init__(self, name, fmt=':f'):
-        self.name = name
-        self.fmt = fmt
-        self.reset()
-
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
-
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
-
-    def __str__(self):
-        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
-        return fmtstr.format(**self.__dict__)
-
-
-def accuracy(output, target, topk=(1,)):
-    """Computes the accuracy over the k top predictions for the specified values of k"""
-    with torch.no_grad():
-        maxk = max(topk)
-        batch_size = target.size(0)
-
-        _, pred = output.topk(maxk, 1, True, True)
-        pred = pred.t()
-        correct = pred.eq(target.view(1, -1).expand_as(pred))
-
-        res = []
-        for k in topk:
-            correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
-            res.append(correct_k.mul_(100.0 / batch_size))
-        return res
-
-
-def evaluate(model, criterion, data_loader, neval_batches):
-    model.eval()
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
-    cnt = 0
-    with torch.no_grad():
-        for image, target in data_loader:
-            output = model(image)
-            loss = criterion(output, target)
-            cnt += 1
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            print('.', end = '')
-            top1.update(acc1[0], image.size(0))
-            top5.update(acc5[0], image.size(0))
-            if cnt >= neval_batches:
-                 return top1, top5
-
-    return top1, top5
 
 def load_model(model_file):
     model = MobileNetV2()
@@ -239,61 +176,18 @@ def load_model(model_file):
     model.to('cpu')
     return model
 
+
 def print_size_of_model(model):
     torch.save(model.state_dict(), "temp.p")
     print('Size (MB):', os.path.getsize("temp.p")/1e6)
     os.remove('temp.p')
 
-def prepare_data_loaders(data_path):
 
-    traindir = os.path.join(data_path, 'train')
-    valdir = os.path.join(data_path, 'val')
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-
-    dataset = torchvision.datasets.ImageFolder(
-        traindir,
-        transforms.Compose([
-            transforms.RandomResizedCrop(224),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ]))
-
-    dataset_test = torchvision.datasets.ImageFolder(
-        valdir,
-        transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ]))
-
-    train_sampler = torch.utils.data.RandomSampler(dataset)
-    test_sampler = torch.utils.data.SequentialSampler(dataset_test)
-
-    data_loader = torch.utils.data.DataLoader(
-        dataset, batch_size=train_batch_size,
-        sampler=train_sampler)
-
-    data_loader_test = torch.utils.data.DataLoader(
-        dataset_test, batch_size=eval_batch_size,
-        sampler=test_sampler)
-
-    return data_loader, data_loader_test
-
-
-data_path = '~/imagenet_1k'
 saved_model_dir = 'data/'
 float_model_file = 'mobilenet_pretrained_float.pth'
 scripted_float_model_file = 'mobilenet_quantization_scripted.pth'
 scripted_quantized_model_file = 'mobilenet_quantization_scripted_quantized.pth'
 
-train_batch_size = 30
-eval_batch_size = 30
-
-data_loader, data_loader_test = prepare_data_loaders(data_path)
-criterion = nn.CrossEntropyLoss()
 float_model = load_model(saved_model_dir + float_model_file).to('cpu')
 
 print('\n Inverted Residual Block: Before fusion \n\n', float_model.features[1].conv)
@@ -304,14 +198,11 @@ float_model.fuse_model()
 
 print('\n Inverted Residual Block: After fusion\n\n',float_model.features[1].conv)
 
-
-num_eval_batches = 10
-
 print("Size of baseline model")
 print_size_of_model(float_model)
 
-top1, top5 = evaluate(float_model, criterion, data_loader_test, neval_batches=num_eval_batches)
-print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches * eval_batch_size, top1.avg))
+top1_fp32, top5_fp32 = eval_accuracy(float_model)
+
 torch.jit.save(torch.jit.script(float_model), saved_model_dir + scripted_float_model_file)
 
 num_calibration_batches = 10
@@ -331,7 +222,9 @@ print('Post Training Quantization Prepare: Inserting Observers')
 print('\n Inverted Residual Block:After observer insertion \n\n', myModel.features[1].conv)
 
 # Calibrate with the training set
-evaluate(myModel, criterion, data_loader, neval_batches=num_calibration_batches)
+for image, _ in get_train_loader("imagenet_1k"):
+    myModel(image)
+
 print('Post Training Quantization: Calibration done')
 
 # Convert to quantized model
@@ -342,8 +235,7 @@ print('\n Inverted Residual Block: After fusion and quantization, note fused mod
 print("Size of model after quantization")
 print_size_of_model(myModel)
 
-top1, top5 = evaluate(myModel, criterion, data_loader_test, neval_batches=num_eval_batches)
-print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches * eval_batch_size, top1.avg))
+top1_per_tensor, top5_per_tensor = eval_accuracy(myModel)
 
 per_channel_quantized_model = load_model(saved_model_dir + float_model_file)
 per_channel_quantized_model.eval()
@@ -352,8 +244,14 @@ per_channel_quantized_model.qconfig = torch.quantization.get_default_qconfig('fb
 print(per_channel_quantized_model.qconfig)
 
 torch.quantization.prepare(per_channel_quantized_model, inplace=True)
-evaluate(per_channel_quantized_model,criterion, data_loader, num_calibration_batches)
+
+for image, _ in get_train_loader("imagenet_1k"):
+    per_channel_quantized_model(image)
+
 torch.quantization.convert(per_channel_quantized_model, inplace=True)
-top1, top5 = evaluate(per_channel_quantized_model, criterion, data_loader_test, neval_batches=num_eval_batches)
-print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches * eval_batch_size, top1.avg))
+top1_per_channel, top5_per_channel = eval_accuracy(per_channel_quantized_model)
 torch.jit.save(torch.jit.script(per_channel_quantized_model), saved_model_dir + scripted_quantized_model_file)
+
+print('\nFP32 accuracy: %2.2f' % top1_fp32.avg)
+print('Per tensor quantization accuracy: %2.2f' % top1_per_tensor.avg)
+print('Per channel quantization accuracy: %2.2f' % top1_per_channel.avg)
