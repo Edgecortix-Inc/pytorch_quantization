@@ -57,7 +57,7 @@ class AnnotatedConvModel(torch.nn.Module):
 
 input_name = 'X'
 input_shapes = {input_name: (1, 3, 224, 224)}
-inp = torch.abs(torch.rand(input_shapes[input_name], dtype=torch.float))
+inp = torch.rand(input_shapes[input_name], dtype=torch.float)
 tvm_inp = inp.numpy().copy()
 
 qmodels = [

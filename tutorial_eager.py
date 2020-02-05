@@ -49,37 +49,35 @@ print_size_of_model(float_model)
 
 top1_fp32, top5_fp32 = eval_accuracy(float_model)
 
-num_calibration_batches = 10
-
-myModel = load_model(saved_model_dir + float_model_file).to('cpu')
-myModel.eval()
+per_tensor_quantized_model = load_model(saved_model_dir + float_model_file).to('cpu')
+per_tensor_quantized_model.eval()
 
 # Fuse Conv, bn and relu
-myModel.fuse_model()
+per_tensor_quantized_model.fuse_model()
 
-myModel.qconfig = torch.quantization.default_qconfig
-print(myModel.qconfig)
-torch.quantization.prepare(myModel, inplace=True)
+per_tensor_quantized_model.qconfig = torch.quantization.default_qconfig
+print(per_tensor_quantized_model.qconfig)
+torch.quantization.prepare(per_tensor_quantized_model, inplace=True)
 
 # Calibrate first
 print('Post Training Quantization Prepare: Inserting Observers')
-print('\n Inverted Residual Block:After observer insertion \n\n', myModel.features[1].conv)
+print('\n Inverted Residual Block:After observer insertion \n\n', per_tensor_quantized_model.features[1].conv)
 
 # Calibrate with the training set
 for image, _ in get_train_loader("imagenet_1k"):
-    myModel(image)
+    per_tensor_quantized_model(image)
 
 print('Post Training Quantization: Calibration done')
 
 # Convert to quantized model
-torch.quantization.convert(myModel, inplace=True)
+torch.quantization.convert(per_tensor_quantized_model, inplace=True)
 print('Post Training Quantization: Convert done')
-print('\n Inverted Residual Block: After fusion and quantization, note fused modules: \n\n', myModel.features[1].conv)
+print('\n Inverted Residual Block: After fusion and quantization, note fused modules: \n\n', per_tensor_quantized_model.features[1].conv)
 
 print("Size of model after quantization")
-print_size_of_model(myModel)
+print_size_of_model(per_tensor_quantized_model)
 
-top1_per_tensor, top5_per_tensor = eval_accuracy(myModel)
+top1_per_tensor, top5_per_tensor = eval_accuracy(per_tensor_quantized_model)
 
 per_channel_quantized_model = load_model(saved_model_dir + float_model_file)
 per_channel_quantized_model.eval()

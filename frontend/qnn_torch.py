@@ -29,10 +29,11 @@ class QuantParam:
 
 
 def unpack_quant_params(param_name, packed_params):
-    if "fc" in param_name:
-        qweight, bias = torch.ops.quantized.linear_unpack(packed_params)
-    else:
+    # TODO figure out a way to decide which unpack to use
+    try:
         qweight, bias = torch.ops.quantized.conv2d_unpack(packed_params)
+    except:
+        qweight, bias = torch.ops.quantized.linear_unpack(packed_params)
 
     weight_np = qweight.dequantize().numpy()
     bias_np = bias.detach().numpy()
@@ -74,7 +75,8 @@ def get_quant_param_for_input(input_value):
         "quantized::conv2d": (6, 7),
         "quantized::conv2d_relu": (6, 7),
         "quantized::linear": (2, 3),
-        "quantized::add_relu": (2, 3)
+        "quantized::add_relu": (2, 3),
+        "quantized::add": (2, 3)
     }
 
     def dfs(current_node):
@@ -100,7 +102,9 @@ def get_input_quant_param_mapping(graph):
                             "quantized::conv2d_relu": 1,
                             "quantized::linear": 1,
                             "quantized::add_relu": 2,
-                            "aten::dequantize": 1}
+                            "quantized::add": 2,
+                            "aten::dequantize": 1,
+                            "aten::mean": 1}
     mapping = {}
     for node in graph.nodes():
         operator = node.kind()
@@ -147,6 +151,18 @@ def add_quant_params(params, quant_params):
             params[qparam.bias_var.name_hint] = tvm.nd.array(qparam.bias)
 
 
+def quantized_adaptive_avg_2d(data, func):
+    inp = _op.cast(data, dtype="int32")
+    out = func(inp)
+    return _op.cast(out, "uint8")
+
+
+def quantized_mean(data, func):
+    # dequantized = relay.qnn.op.dequantize(data,
+    # relay.qnn.op.quantize( out_dtype="int8")
+    return func(data)
+
+
 def _quantize_per_tensor():
     def _impl(inputs, input_type):
         return relay.qnn.op.quantize(inputs[0], _expr.const(inputs[1]),
@@ -187,10 +203,6 @@ def _quantized_conv2d(with_relu=False):
         assert len(inputs) == 10, "Input quant params not found in op inputs"
         input_scale = _expr.const(inputs[8])
         input_zero_point = _expr.const(inputs[9])
-
-        # print("input_scale, input_zero_point:", input_scale, input_zero_point)
-        # print("weight_scale, weight_zero_point:", weight_scale, weight_zero_point)
-        # print("output_scale, output_zero_point:", output_scale, output_zero_point)
 
         strides, padding, dilation = inputs[2], inputs[3], inputs[4]
         strides = infer_shape(inputs[2])
@@ -298,5 +310,6 @@ convert_map = {
     'aten::dequantize': _dequantize(),
     'quantized::conv2d': _quantized_conv2d(),
     'quantized::add_relu': _add(True),
+    'quantized::add': _add(),
     'quantized::linear': _linear()
 }
