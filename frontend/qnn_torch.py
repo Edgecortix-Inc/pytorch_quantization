@@ -213,10 +213,10 @@ def _quantized_conv2d(with_relu=False):
         bias_var = inputs[1][3]
 
         if bias_var is not None:
-            fp32_out = _op.cast(conv_out, "float32")
-            bias_scaled = _op.tensor.divide(bias_var, requant_input_scale)
-            bias_result = _op.nn.bias_add(fp32_out, bias_scaled)
-            conv_res = _op.cast(_op.tensor.round(bias_result), "int32")
+            qbias = relay.qnn.op.quantize(bias_var, requant_input_scale,
+                                          _expr.const(0, "int32")
+                                          , out_dtype="int32")
+            conv_res = _op.nn.bias_add(conv_out, qbias)
         else:
             conv_res = conv_out
 
@@ -227,8 +227,7 @@ def _quantized_conv2d(with_relu=False):
                                               out_dtype="uint8",
                                               axis=1)
         if with_relu:
-            return relay.nn.relu(requantized)
-            # return _op.tensor.clip(requantized, get_scalar(output_zero_point), 255.)
+            return _op.tensor.clip(requantized, get_scalar(output_zero_point), 255.)
 
         return requantized
 
@@ -249,7 +248,7 @@ def _add(with_relu=False):
                                input_scale_rhs, input_zero_point_rhs,
                                output_scale, output_zero_point)
         if with_relu:
-            return relay.nn.relu(add)
+            return _op.tensor.clip(add, get_scalar(output_zero_point), 255.)
 
         return add
 
@@ -275,10 +274,10 @@ def _linear():
         bias_var = inputs[1][3]
 
         if bias_var is not None:
-            fp32_out = _op.cast(dense, "float32")
-            bias_scaled = _op.tensor.divide(bias_var, requant_input_scale)
-            bias_result = _op.nn.bias_add(fp32_out, bias_scaled)
-            dense_res = _op.cast(_op.tensor.round(bias_result), "int32")
+            qbias = relay.qnn.op.quantize(bias_var, requant_input_scale,
+                                          _expr.const(0, "int32")
+                                          , out_dtype="int32")
+            dense_res = _op.nn.bias_add(dense, qbias)
         else:
             dense_res = dense
 
