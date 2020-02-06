@@ -15,13 +15,14 @@ class QuantParam:
         self.weight_var = _expr.var(param_prefix + "_weight",
                                     shape=weight.shape)
         self.weight = weight
-        self.bias = bias
 
         if bias is not None:
             self.bias_var = _expr.var(param_prefix + "_bias",
                                       shape=bias.shape)
+            self.bias = bias.detach().numpy()
         else:
             self.bias_var = None
+            self.bias = None
 
         self.scale = _expr.const(np.asscalar(scale))
         self.zero_point = _expr.const(np.asscalar(zero_point),
@@ -36,16 +37,15 @@ def unpack_quant_params(param_name, packed_params):
         qweight, bias = torch.ops.quantized.linear_unpack(packed_params)
 
     weight_np = qweight.dequantize().numpy()
-    bias_np = bias.detach().numpy()
 
     if qweight.qscheme() == torch.per_tensor_affine:
         scale = np.array([qweight.q_scale()])
         zero_point = np.array([qweight.q_zero_point()], dtype="int32")
-        param = QuantParam(weight_np, bias_np, scale, zero_point, param_name)
+        param = QuantParam(weight_np, bias, scale, zero_point, param_name)
     else:
         scales = qweight.q_per_channel_scales().numpy()
         zero_points = qweight.q_per_channel_zero_points().numpy()
-        param = QuantParam(weight_np, bias_np, scales, zero_points, param_name)
+        param = QuantParam(weight_np, bias, scales, zero_points, param_name)
 
     return param
 
@@ -190,6 +190,7 @@ def _dequantize():
     def _impl(inputs, input_type):
         inp_scale = _expr.const(inputs[1])
         inp_zero_point = _expr.const(inputs[2])
+        print("dequantize scale, zp:", inputs[1], inputs[2])
         return relay.qnn.op.dequantize(inputs[0], inp_scale, inp_zero_point)
     return _impl
 
@@ -267,12 +268,16 @@ def _quantized_conv2d(with_relu=False):
                                               requant_input_scale,
                                               _expr.const(0, "int32"),
                                               output_scale, output_zero_point,
-                                              out_dtype="uint8",
+                                              out_dtype="int32",
                                               axis=1)
+        clip_min = 0
         if with_relu:
-            return _op.tensor.clip(requantized, get_scalar(output_zero_point), 255.)
+            # print("with relu, output zero point = ", output_zero_point)
+            clip_min = get_scalar(output_zero_point)
 
-        return requantized
+        clip = _op.tensor.clip(requantized, clip_min, 255.)
+        return _op.cast(clip, dtype="uint8")
+        # return requantized
 
     return _impl
 
@@ -328,9 +333,10 @@ def _linear():
                                               requant_input_scale,
                                               relay.const(0, 'int32'),
                                               output_scale, output_zero_point,
-                                              out_dtype="uint8",
+                                              out_dtype="int32",
                                               axis=1)
-        return requantized
+        clip = _op.tensor.clip(requantized, 0, 255.)
+        return _op.cast(clip, dtype="uint8")
 
     return _impl
 
