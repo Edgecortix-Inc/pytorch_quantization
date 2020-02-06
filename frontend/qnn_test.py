@@ -51,11 +51,16 @@ def quantize_model(model, inp, per_channel=False, use_cuda=False, dummy=True):
 
 
 qmodels = [
-    # ("resnet18", qresnet.resnet18(pretrained=True).eval()),
+    ("resnet18", qresnet.resnet18(pretrained=True).eval()),
     ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
-    # ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
-    # ("googlenet", qgooglenet(pretrained=True).eval()),
+    ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
+    ("googlenet", qgooglenet(pretrained=True).eval()),
 ]
+
+from tvm.relay.testing.temp_op_attr import TempOpAttr
+
+def legalize_qnn_conv2d(attrs, inputs, types):
+    return None
 
 results = []
 use_cuda = False
@@ -76,6 +81,8 @@ for (model_name, raw_model) in qmodels:
     script_module = torch.jit.trace(raw_model, inp.to("cpu")).eval()
 
     mod, params = parse_script_module(script_module, input_shapes)
+    # print(mod)
+    # continue
 
     with torch.no_grad():
         # Quantized models can only run on cpu in torch
@@ -88,6 +95,9 @@ for (model_name, raw_model) in qmodels:
         target = "llvm -mcpu=core-avx2"
 
     with relay.build_config(opt_level=3):
+        # with TempOpAttr("qnn.conv2d", "FTVMQnnLegalize", legalize_qnn_conv2d):
+            # opt_mod, opt_params = relay.optimize(mod, target=target, params=params)
+            # print(opt_mod)
         json, lib, params = relay.build(mod, target=target, params=params)
 
     runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context(target, 0))

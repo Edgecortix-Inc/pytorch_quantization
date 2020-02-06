@@ -227,13 +227,29 @@ def _quantized_conv2d(with_relu=False):
 
         weight_shape = infer_shape(weight)
         kernel_size = (weight_shape[2], weight_shape[3])
+        out_channels = weight_shape[0]
 
-        conv_out = relay.qnn.op.conv2d(inputs[0], weight,
+        # print("OC %d, groups %d, groups mod 8 %d" % (out_channels, groups, groups % 8))
+        # print("padding:", padding)
+
+        if padding[0] != 0 or padding[1] != 0:
+            pad_val = get_scalar(input_zero_point)
+            # print("pad_val:", pad_val)
+            inp = _op.nn.pad(inputs[0], pad_width=((0, 0),
+                                                   (0, 0),
+                                                   (padding[0], padding[0]),
+                                                   (padding[1], padding[1])),
+                             pad_value=float(pad_val))
+        else:
+            inp = inputs[0]
+
+        conv_out = relay.qnn.op.conv2d(inp, weight,
                                        input_zero_point, weight_zero_point,
                                        input_scale, weight_scale,
                                        kernel_size=kernel_size,
                                        dilation=dilation, strides=strides,
-                                       padding=padding, groups=groups)
+                                       padding=(0, 0), groups=groups,
+                                       channels=out_channels)
 
         # input scale * weight scale
         requant_input_scale = _expr.const(inputs[8] * get_scalar(weight_scale))
