@@ -16,7 +16,7 @@ from eval_imagenet_1k import eval_accuracy, wrap_tvm_model
 from eval_imagenet_1k import get_train_loader, download_imagenet_1k
 
 
-def quantize_model(model, inp, per_channel=False, dummy=True):
+def quantize_model(model, inp, per_channel=False, use_cuda=False, dummy=True):
     model.fuse_model()
 
     if per_channel:
@@ -36,20 +36,29 @@ def quantize_model(model, inp, per_channel=False, dummy=True):
 
         print("\nCalibrating on real data...")
         for image, _ in get_train_loader(data_dir):
-            model(image)
+            if use_cuda:
+                inp = image.to("cuda")
+            else:
+                inp = image
+
+            with torch.no_grad():
+                model(inp)
+
         print("Done.")
 
+    model.to("cpu")
     torch.quantization.convert(model, inplace=True)
 
 
 qmodels = [
-    ("resnet18", qresnet.resnet18(pretrained=True).eval()),
+    # ("resnet18", qresnet.resnet18(pretrained=True).eval()),
     ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
-    ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
-    ("googlenet", qgooglenet(pretrained=True).eval()),
+    # ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
+    # ("googlenet", qgooglenet(pretrained=True).eval()),
 ]
 
 results = []
+use_cuda = False
 
 for (model_name, raw_model) in qmodels:
     input_name = 'X'
@@ -57,24 +66,36 @@ for (model_name, raw_model) in qmodels:
     inp = torch.rand(input_shapes[input_name], dtype=torch.float)
     tvm_inp = inp.numpy().copy()
 
-    quantize_model(raw_model, inp, dummy=False)
-    script_module = torch.jit.trace(raw_model, inp).eval()
+    if use_cuda:
+        raw_model.to("cuda")
+        inp = inp.to("cuda")
+
+    quantize_model(raw_model, inp, per_channel=False,
+                   use_cuda=use_cuda, dummy=False)
+
+    script_module = torch.jit.trace(raw_model, inp.to("cpu")).eval()
+
     mod, params = parse_script_module(script_module, input_shapes)
 
     with torch.no_grad():
-        pt_result = script_module(inp).numpy()
+        # Quantized models can only run on cpu in torch
+        pt_result = script_module(inp.to("cpu")).numpy()
         top1_pt, top5_pt = eval_accuracy(script_module)
 
-    with relay.build_config(opt_level=3):
-        json, lib, params = relay.build(mod, target="llvm", params=params)
+    if use_cuda:
+        target = "cuda"
+    else:
+        target = "llvm -mcpu=core-avx2"
 
-    runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context("cpu", 0))
+    with relay.build_config(opt_level=3):
+        json, lib, params = relay.build(mod, target=target, params=params)
+
+    runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context(target, 0))
     runtime.set_input(**params)
     runtime.set_input(input_name, tvm_inp)
     runtime.run()
     tvm_result = runtime.get_output(0).asnumpy()
 
-    # np.allclose(tvm_result, pt_result)
     max_abs_diff = np.max(np.abs(tvm_result - pt_result))
     mean_abs_diff = np.mean(np.abs(tvm_result - pt_result))
     num_correct = np.sum(tvm_result == pt_result)
@@ -90,4 +111,4 @@ for (model_name, num_correct, max_abs_diff, mean_abs_diff, top1_pt, top5_pt, top
     print("TVM accuracy: Top1 = %2.2f, Top5 = %2.2f" % (top1_tvm.avg, top5_tvm.avg))
     print("max abs diff:", max_abs_diff)
     print("mean_abs_diff:", mean_abs_diff)
-    print("%d in 1000 values correct." % (num_correct, 1000))
+    print("%d in 1000 values correct." % num_correct)
