@@ -57,13 +57,8 @@ qmodels = [
     ("googlenet", qgooglenet(pretrained=True).eval()),
 ]
 
-from tvm.relay.testing.temp_op_attr import TempOpAttr
-
-def legalize_qnn_conv2d(attrs, inputs, types):
-    return None
-
 results = []
-use_cuda = False
+use_cuda = False  # lower accuacy on torch and tvm when using cuda
 
 for (model_name, raw_model) in qmodels:
     input_name = 'X'
@@ -95,9 +90,6 @@ for (model_name, raw_model) in qmodels:
         target = "llvm -mcpu=core-avx2"
 
     with relay.build_config(opt_level=3):
-        # with TempOpAttr("qnn.conv2d", "FTVMQnnLegalize", legalize_qnn_conv2d):
-            # opt_mod, opt_params = relay.optimize(mod, target=target, params=params)
-            # print(opt_mod)
         json, lib, params = relay.build(mod, target=target, params=params)
 
     runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context(target, 0))

@@ -291,14 +291,30 @@ def _add(with_relu=False):
         input_zero_point_lhs = _expr.const(inputs[5])
         input_scale_rhs = _expr.const(inputs[6])
         input_zero_point_rhs = _expr.const(inputs[7])
-        add = relay.qnn.op.add(inputs[0], inputs[1],
-                               input_scale_lhs, input_zero_point_lhs,
-                               input_scale_rhs, input_zero_point_rhs,
-                               output_scale, output_zero_point)
-        if with_relu:
-            return _op.tensor.clip(add, get_scalar(output_zero_point), 255.)
+        lhs = inputs[0]
+        rhs = inputs[1]
 
-        return add
+        if isinstance(lhs, _expr.Call) and lhs.op.name == 'qnn.quantize':
+            lhs = lhs.args[0]
+        else:
+            lhs = relay.qnn.op.dequantize(lhs,
+                                          input_scale_lhs,
+                                          input_zero_point_lhs)
+
+        if isinstance(rhs, _expr.Call) and rhs.op.name == 'qnn.quantize':
+            rhs = rhs.args[0]
+        else:
+            rhs = relay.qnn.op.dequantize(rhs,
+                                          input_scale_rhs,
+                                          input_zero_point_rhs)
+        add = relay.add(lhs, rhs)
+        out = relay.qnn.op.quantize(add,
+                                    output_scale,
+                                    output_zero_point)
+        if with_relu:
+            return _op.nn.relu(out)
+
+        return out
 
     return _impl
 
@@ -346,17 +362,18 @@ def _cat():
         axis = inputs[1]
         output_scale = _expr.const(inputs[2])
         output_zero_point = _expr.const(inputs[3])
-        input_scales = []
-        input_zero_points = []
         num_inputs = (len(inputs) - 4) // 2
+        dequantized = []
 
         for i in range(0, num_inputs):
-            input_scales.append(_expr.const(inputs[4+i*2]))
-            input_zero_points.append(_expr.const(inputs[4+i*2+1]))
+            inp_scale = _expr.const(inputs[4+i*2])
+            inp_zero_point = _expr.const(inputs[4+i*2+1])
+            dequantized.append(relay.qnn.op.dequantize(inputs[0][i],
+                                                       inp_scale, inp_zero_point))
 
-        return relay.qnn.op.concatenate(inputs[0],
-                                        input_scales, input_zero_points,
-                                        output_scale, output_zero_point, axis)
+        return relay.qnn.op.quantize(_op.tensor.concatenate(dequantized, axis=axis),
+                                     output_scale,
+                                     output_zero_point)
     return _impl
 
 
