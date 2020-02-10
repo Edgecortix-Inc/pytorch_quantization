@@ -51,11 +51,18 @@ def quantize_model(model, inp, per_channel=False, use_cuda=False, dummy=True):
 
 
 qmodels = [
-    ("resnet18", qresnet.resnet18(pretrained=True).eval()),
-    ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
-    ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
-    ("googlenet", qgooglenet(pretrained=True).eval()),
+    # ("resnet18", qresnet.resnet18(pretrained=True).eval()),
+    # ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
+    # ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
+    # ("googlenet", qgooglenet(pretrained=True).eval()),
 ]
+
+import sys
+sys.path.append("../models")
+from qmobilenet_v3 import load_model
+
+model_file = "/home/masa/work/edgecortix/MobilenetV3/mobilenetv3_small_67.4.pth.tar"
+qmodels.append(("mobilenet_v3", load_model(model_file).eval()))
 
 results = []
 use_cuda = False  # lower accuacy on torch and tvm when using cuda
@@ -71,9 +78,17 @@ for (model_name, raw_model) in qmodels:
         inp = inp.to("cuda")
 
     quantize_model(raw_model, inp, per_channel=False,
-                   use_cuda=use_cuda, dummy=False)
+                   use_cuda=use_cuda, dummy=True)
 
+    print(raw_model)
     script_module = torch.jit.trace(raw_model, inp.to("cpu")).eval()
+    # script_module = torch.jit.script(raw_model).eval()
+    graph = script_module.graph
+    continue
+    torch._C._jit_pass_inline(graph)
+    continue
+    # torch._C._jit_pass_dce(graph)
+    # torch._C._jit_pass_constant_propagation(graph)
 
     mod, params = parse_script_module(script_module, input_shapes)
     # print(mod)
@@ -114,3 +129,6 @@ for (model_name, num_correct, max_abs_diff, mean_abs_diff, top1_pt, top5_pt, top
     print("max abs diff:", max_abs_diff)
     print("mean_abs_diff:", mean_abs_diff)
     print("%d in 1000 values correct." % num_correct)
+
+graph = script_module.graph
+add_scalars = graph.findAllNodes("quantized::add_scalar")

@@ -6,7 +6,8 @@ import warnings
 import torch.quantization
 
 
-from qmobilenet_v2 import load_model
+#from models.qmobilenet_v2  import load_model
+from models.qmobilenet_v3  import load_model
 from frontend.eval_imagenet_1k import eval_accuracy, get_train_loader
 
 
@@ -31,8 +32,13 @@ def print_size_of_model(model):
     os.remove('temp.p')
 
 
-saved_model_dir = 'data/'
-float_model_file = 'mobilenet_pretrained_float.pth'
+# for v2
+# saved_model_dir = 'data/'
+# float_model_file = 'mobilenet_pretrained_float.pth'
+
+# for v3
+saved_model_dir = "/home/masa/work/edgecortix/MobilenetV3/"
+float_model_file = 'mobilenetv3_small_67.4.pth.tar'
 
 float_model = load_model(saved_model_dir + float_model_file).to('cpu')
 
@@ -79,20 +85,24 @@ print_size_of_model(per_tensor_quantized_model)
 
 top1_per_tensor, top5_per_tensor = eval_accuracy(per_tensor_quantized_model)
 
-per_channel_quantized_model = load_model(saved_model_dir + float_model_file)
-per_channel_quantized_model.eval()
-per_channel_quantized_model.fuse_model()
-per_channel_quantized_model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
-print(per_channel_quantized_model.qconfig)
+jit_model = torch.jit.script(per_tensor_quantized_model)
 
-torch.quantization.prepare(per_channel_quantized_model, inplace=True)
+jit_model(torch.rand((1, 3, 224, 224), dtype=torch.float))
 
-for image, _ in get_train_loader("imagenet_1k"):
-    per_channel_quantized_model(image)
+# per_channel_quantized_model = load_model(saved_model_dir + float_model_file)
+# per_channel_quantized_model.eval()
+# per_channel_quantized_model.fuse_model()
+# per_channel_quantized_model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
+# print(per_channel_quantized_model.qconfig)
 
-torch.quantization.convert(per_channel_quantized_model, inplace=True)
-top1_per_channel, top5_per_channel = eval_accuracy(per_channel_quantized_model)
+# torch.quantization.prepare(per_channel_quantized_model, inplace=True)
 
-print('\nFP32 accuracy: %2.2f' % top1_fp32.avg)
-print('Per tensor quantization accuracy: %2.2f' % top1_per_tensor.avg)
-print('Per channel quantization accuracy: %2.2f' % top1_per_channel.avg)
+# for image, _ in get_train_loader("imagenet_1k"):
+#     per_channel_quantized_model(image)
+
+# torch.quantization.convert(per_channel_quantized_model, inplace=True)
+# top1_per_channel, top5_per_channel = eval_accuracy(per_channel_quantized_model)
+
+# print('\nFP32 accuracy: %2.2f' % top1_fp32.avg)
+# print('Per tensor quantization accuracy: %2.2f' % top1_per_tensor.avg)
+# print('Per channel quantization accuracy: %2.2f' % top1_per_channel.avg)
