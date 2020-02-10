@@ -15,13 +15,14 @@ class QuantParam:
         self.weight_var = _expr.var(param_prefix + "_weight",
                                     shape=weight.shape)
         self.weight = weight
-        self.bias = bias
 
         if bias is not None:
             self.bias_var = _expr.var(param_prefix + "_bias",
                                       shape=bias.shape)
+            self.bias = bias.detach().numpy()
         else:
             self.bias_var = None
+            self.bias = None
 
         self.scale = _expr.const(np.asscalar(scale))
         self.zero_point = _expr.const(np.asscalar(zero_point),
@@ -29,22 +30,22 @@ class QuantParam:
 
 
 def unpack_quant_params(param_name, packed_params):
-    if "fc" in param_name:
-        qweight, bias = torch.ops.quantized.linear_unpack(packed_params)
-    else:
+    # TODO figure out a way to decide which unpack to use
+    try:
         qweight, bias = torch.ops.quantized.conv2d_unpack(packed_params)
+    except:
+        qweight, bias = torch.ops.quantized.linear_unpack(packed_params)
 
     weight_np = qweight.dequantize().numpy()
-    bias_np = bias.detach().numpy()
 
     if qweight.qscheme() == torch.per_tensor_affine:
         scale = np.array([qweight.q_scale()])
         zero_point = np.array([qweight.q_zero_point()], dtype="int32")
-        param = QuantParam(weight_np, bias_np, scale, zero_point, param_name)
+        param = QuantParam(weight_np, bias, scale, zero_point, param_name)
     else:
         scales = qweight.q_per_channel_scales().numpy()
         zero_points = qweight.q_per_channel_zero_points().numpy()
-        param = QuantParam(weight_np, bias_np, scales, zero_points, param_name)
+        param = QuantParam(weight_np, bias, scales, zero_points, param_name)
 
     return param
 
@@ -74,7 +75,9 @@ def get_quant_param_for_input(input_value):
         "quantized::conv2d": (6, 7),
         "quantized::conv2d_relu": (6, 7),
         "quantized::linear": (2, 3),
-        "quantized::add_relu": (2, 3)
+        "quantized::add_relu": (2, 3),
+        "quantized::add": (2, 3),
+        "quantized::cat": (2, 3)
     }
 
     def dfs(current_node):
@@ -100,11 +103,16 @@ def get_input_quant_param_mapping(graph):
                             "quantized::conv2d_relu": 1,
                             "quantized::linear": 1,
                             "quantized::add_relu": 2,
-                            "aten::dequantize": 1}
+                            "quantized::add": 2,
+                            "aten::dequantize": 1,
+                            "aten::mean": 1}
+    need_input_quant_param = set(num_quantized_inputs.keys())
+    need_input_quant_param.add("quantized::cat")
+
     mapping = {}
     for node in graph.nodes():
         operator = node.kind()
-        if operator not in num_quantized_inputs:
+        if operator not in need_input_quant_param:
             continue
 
         node_name = get_output_name(node)
@@ -112,13 +120,23 @@ def get_input_quant_param_mapping(graph):
         mapping[node_name]["input_scales"] = []
         mapping[node_name]["input_zero_points"] = []
 
-        for i in range(num_quantized_inputs[operator]):
-            scale, zp = get_quant_param_for_input(node.inputsAt(i))
-            # print("\nquant param for the node ", node_name)
-            # print(scale)
-            # print(zp)
-            mapping[node_name]["input_scales"].append(scale)
-            mapping[node_name]["input_zero_points"].append(zp)
+        if operator == "quantized::cat":
+            inputs = node.inputsAt(0).node().inputs()
+            for inp in inputs:
+                scale, zp = get_quant_param_for_input(inp)
+                mapping[node_name]["input_scales"].append(scale)
+                mapping[node_name]["input_zero_points"].append(zp)
+            # print("\nquant param for the cat node ", node_name)
+            # print(mapping[node_name]["input_scales"])
+            # print(mapping[node_name]["input_zero_points"])
+        else:
+            for i in range(num_quantized_inputs[operator]):
+                scale, zp = get_quant_param_for_input(node.inputsAt(i))
+                # print("\nquant param for the node ", node_name)
+                # print(scale)
+                # print(zp)
+                mapping[node_name]["input_scales"].append(scale)
+                mapping[node_name]["input_zero_points"].append(zp)
 
     return mapping
 
@@ -147,6 +165,19 @@ def add_quant_params(params, quant_params):
             params[qparam.bias_var.name_hint] = tvm.nd.array(qparam.bias)
 
 
+def quantized_adaptive_avg_2d(data, func):
+    inp = _op.cast(data, dtype="int32")
+    out = func(inp)
+    return _op.cast(out, "uint8")
+
+
+def quantized_mean(data, input_scale, input_zero_point, func):
+    dequantized = relay.qnn.op.dequantize(data, input_scale, input_zero_point)
+    out = func(dequantized)
+    return relay.qnn.op.quantize(out, input_scale, input_zero_point,
+                                 out_dtype="uint8", axis=1)
+
+
 def _quantize_per_tensor():
     def _impl(inputs, input_type):
         return relay.qnn.op.quantize(inputs[0], _expr.const(inputs[1]),
@@ -159,6 +190,7 @@ def _dequantize():
     def _impl(inputs, input_type):
         inp_scale = _expr.const(inputs[1])
         inp_zero_point = _expr.const(inputs[2])
+        print("dequantize scale, zp:", inputs[1], inputs[2])
         return relay.qnn.op.dequantize(inputs[0], inp_scale, inp_zero_point)
     return _impl
 
@@ -188,10 +220,6 @@ def _quantized_conv2d(with_relu=False):
         input_scale = _expr.const(inputs[8])
         input_zero_point = _expr.const(inputs[9])
 
-        # print("input_scale, input_zero_point:", input_scale, input_zero_point)
-        # print("weight_scale, weight_zero_point:", weight_scale, weight_zero_point)
-        # print("output_scale, output_zero_point:", output_scale, output_zero_point)
-
         strides, padding, dilation = inputs[2], inputs[3], inputs[4]
         strides = infer_shape(inputs[2])
         padding = infer_shape(inputs[3])
@@ -200,13 +228,29 @@ def _quantized_conv2d(with_relu=False):
 
         weight_shape = infer_shape(weight)
         kernel_size = (weight_shape[2], weight_shape[3])
+        out_channels = weight_shape[0]
 
-        conv_out = relay.qnn.op.conv2d(inputs[0], weight,
+        # print("OC %d, groups %d, groups mod 8 %d" % (out_channels, groups, groups % 8))
+        # print("padding:", padding)
+
+        if padding[0] != 0 or padding[1] != 0:
+            pad_val = get_scalar(input_zero_point)
+            # print("pad_val:", pad_val)
+            inp = _op.nn.pad(inputs[0], pad_width=((0, 0),
+                                                   (0, 0),
+                                                   (padding[0], padding[0]),
+                                                   (padding[1], padding[1])),
+                             pad_value=float(pad_val))
+        else:
+            inp = inputs[0]
+
+        conv_out = relay.qnn.op.conv2d(inp, weight,
                                        input_zero_point, weight_zero_point,
                                        input_scale, weight_scale,
                                        kernel_size=kernel_size,
                                        dilation=dilation, strides=strides,
-                                       padding=padding, groups=groups)
+                                       padding=(0, 0), groups=groups,
+                                       channels=out_channels)
 
         # input scale * weight scale
         requant_input_scale = _expr.const(inputs[8] * get_scalar(weight_scale))
@@ -224,12 +268,16 @@ def _quantized_conv2d(with_relu=False):
                                               requant_input_scale,
                                               _expr.const(0, "int32"),
                                               output_scale, output_zero_point,
-                                              out_dtype="uint8",
+                                              out_dtype="int32",
                                               axis=1)
+        clip_min = 0
         if with_relu:
-            return _op.tensor.clip(requantized, get_scalar(output_zero_point), 255.)
+            # print("with relu, output zero point = ", output_zero_point)
+            clip_min = get_scalar(output_zero_point)
 
-        return requantized
+        clip = _op.tensor.clip(requantized, clip_min, 255.)
+        return _op.cast(clip, dtype="uint8")
+        # return requantized
 
     return _impl
 
@@ -243,14 +291,30 @@ def _add(with_relu=False):
         input_zero_point_lhs = _expr.const(inputs[5])
         input_scale_rhs = _expr.const(inputs[6])
         input_zero_point_rhs = _expr.const(inputs[7])
-        add = relay.qnn.op.add(inputs[0], inputs[1],
-                               input_scale_lhs, input_zero_point_lhs,
-                               input_scale_rhs, input_zero_point_rhs,
-                               output_scale, output_zero_point)
-        if with_relu:
-            return _op.tensor.clip(add, get_scalar(output_zero_point), 255.)
+        lhs = inputs[0]
+        rhs = inputs[1]
 
-        return add
+        if isinstance(lhs, _expr.Call) and lhs.op.name == 'qnn.quantize':
+            lhs = lhs.args[0]
+        else:
+            lhs = relay.qnn.op.dequantize(lhs,
+                                          input_scale_lhs,
+                                          input_zero_point_lhs)
+
+        if isinstance(rhs, _expr.Call) and rhs.op.name == 'qnn.quantize':
+            rhs = rhs.args[0]
+        else:
+            rhs = relay.qnn.op.dequantize(rhs,
+                                          input_scale_rhs,
+                                          input_zero_point_rhs)
+        add = relay.add(lhs, rhs)
+        out = relay.qnn.op.quantize(add,
+                                    output_scale,
+                                    output_zero_point)
+        if with_relu:
+            return _op.nn.relu(out)
+
+        return out
 
     return _impl
 
@@ -285,10 +349,31 @@ def _linear():
                                               requant_input_scale,
                                               relay.const(0, 'int32'),
                                               output_scale, output_zero_point,
-                                              out_dtype="uint8",
+                                              out_dtype="int32",
                                               axis=1)
-        return requantized
+        clip = _op.tensor.clip(requantized, 0, 255.)
+        return _op.cast(clip, dtype="uint8")
 
+    return _impl
+
+
+def _cat():
+    def _impl(inputs, input_type):
+        axis = inputs[1]
+        output_scale = _expr.const(inputs[2])
+        output_zero_point = _expr.const(inputs[3])
+        num_inputs = (len(inputs) - 4) // 2
+        dequantized = []
+
+        for i in range(0, num_inputs):
+            inp_scale = _expr.const(inputs[4+i*2])
+            inp_zero_point = _expr.const(inputs[4+i*2+1])
+            dequantized.append(relay.qnn.op.dequantize(inputs[0][i],
+                                                       inp_scale, inp_zero_point))
+
+        return relay.qnn.op.quantize(_op.tensor.concatenate(dequantized, axis=axis),
+                                     output_scale,
+                                     output_zero_point)
     return _impl
 
 
@@ -298,5 +383,7 @@ convert_map = {
     'aten::dequantize': _dequantize(),
     'quantized::conv2d': _quantized_conv2d(),
     'quantized::add_relu': _add(True),
-    'quantized::linear': _linear()
+    'quantized::add': _add(),
+    'quantized::linear': _linear(),
+    'quantized::cat': _cat()
 }

@@ -91,13 +91,22 @@ def accuracy(output, target, topk=(1,)):
         return res
 
 
-def evaluate(model, data_loader, neval_batches):
+def evaluate(model, data_loader, neval_batches, use_cuda):
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
     cnt = 0
     with torch.no_grad():
         for image, target in data_loader:
-            output = model(image)
+            if use_cuda:
+                inp = image.to("cuda")
+            else:
+                inp = image
+
+            output = model(inp)
+
+            if use_cuda:
+                output = output.to("cpu")
+
             cnt += 1
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
             print('.', end='')
@@ -109,7 +118,7 @@ def evaluate(model, data_loader, neval_batches):
     return top1, top5
 
 
-def eval_accuracy(model_func):
+def eval_accuracy(model_func, use_cuda=False):
     data_root = "."
     data_dir = "imagenet_1k"
     if not os.path.exists(os.path.join(data_root, data_dir)):
@@ -118,7 +127,7 @@ def eval_accuracy(model_func):
     test_loader = get_test_loader(data_dir)
     num_eval_batches = 10
 
-    return evaluate(model_func, test_loader, num_eval_batches)
+    return evaluate(model_func, test_loader, num_eval_batches, use_cuda)
 
 
 def wrap_tvm_model(tvm_model, input_name):

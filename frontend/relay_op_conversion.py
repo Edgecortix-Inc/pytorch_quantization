@@ -11,6 +11,7 @@ from tvm.relay.frontend.common import infer_shape as _infer_shape
 from tvm.relay.frontend.common import infer_value as _infer_value
 from tvm.relay.frontend.common import infer_type as _infer_type
 
+import qnn_torch
 
 def wrap_const(c):
     if not isinstance(c, _expr.Expr):
@@ -162,19 +163,13 @@ def _adaptive_avg_2d():
         data = inputs[0]
         output_size = _infer_shape(inputs[1])
 
-        quantized = input_types[0] == "quint8"
+        def func(x):
+            return _op.contrib.contrib.adaptive_avg_pool2d(x, output_size=output_size)
 
-        if quantized:
-            inp = _op.cast(data, dtype="int32")
-        else:
-            inp = data
+        if input_types[0] == "quint8":
+            return qnn_torch.quantized_adaptive_avg_2d(data, func)
 
-        out = _op.contrib.contrib.adaptive_avg_pool2d(inp,
-                                                      output_size=output_size)
-        if quantized:
-            return _op.cast(out, dtype="uint8")
-
-        return out
+        return func(data)
 
     return _impl
 
@@ -593,6 +588,7 @@ def _reduce(name):
 def _mean():
     def _impl(inputs, input_types):
         data = inputs[0]
+
         if inputs[1]:
             axis = _infer_shape(inputs[1])
         else:
@@ -606,7 +602,17 @@ def _mean():
         else:
             exclude = False
 
-        return _op.mean(data, axis, keepdims, exclude)
+        def func(x):
+            return _op.mean(x, axis, keepdims, exclude)
+
+        if input_types[0] == "quint8":
+            input_scale = _expr.const(inputs[4])
+            input_zero_point = _expr.const(inputs[5])
+            return qnn_torch.quantized_mean(data, input_scale,
+                                            input_zero_point, func)
+
+        return func(data)
+
     return _impl
 
 def _chunk():
