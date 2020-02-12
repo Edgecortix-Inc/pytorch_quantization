@@ -77,6 +77,8 @@ def get_quant_param_for_input(input_value):
         "quantized::linear": (2, 3),
         "quantized::add_relu": (2, 3),
         "quantized::add": (2, 3),
+        "quantized::mul_relu": (2, 3),
+        "quantized::mul": (2, 3),
         "quantized::cat": (2, 3)
     }
 
@@ -104,8 +106,12 @@ def get_input_quant_param_mapping(graph):
                             "quantized::linear": 1,
                             "quantized::add_relu": 2,
                             "quantized::add": 2,
+                            "quantized::mul_relu": 2,
+                            "quantized::mul": 2,
                             "aten::dequantize": 1,
-                            "aten::mean": 1}
+                            "aten::mean": 1,
+                            "quantized::relu6": 1,
+                            }
     need_input_quant_param = set(num_quantized_inputs.keys())
     need_input_quant_param.add("quantized::cat")
 
@@ -282,7 +288,7 @@ def _quantized_conv2d(with_relu=False):
     return _impl
 
 
-def _add(with_relu=False):
+def _binop(relay_op, with_relu=False):
     def _impl(inputs, input_type):
         output_scale = _expr.const(inputs[2])
         output_zero_point = _expr.const(inputs[3])
@@ -307,7 +313,7 @@ def _add(with_relu=False):
             rhs = relay.qnn.op.dequantize(rhs,
                                           input_scale_rhs,
                                           input_zero_point_rhs)
-        add = relay.add(lhs, rhs)
+        add = relay_op(lhs, rhs)
         out = relay.qnn.op.quantize(add,
                                     output_scale,
                                     output_zero_point)
@@ -319,7 +325,7 @@ def _add(with_relu=False):
     return _impl
 
 
-def _linear():
+def _linear(with_relu=False):
     def _impl(inputs, input_type):
         weight = inputs[1][0]
         weight_scale = inputs[1][1]
@@ -351,7 +357,11 @@ def _linear():
                                               output_scale, output_zero_point,
                                               out_dtype="int32",
                                               axis=1)
-        clip = _op.tensor.clip(requantized, 0, 255.)
+        clip_min = 0
+        if with_relu:
+            clip_min = get_scalar(output_zero_point)
+
+        clip = _op.tensor.clip(requantized, clip_min, 255.)
         return _op.cast(clip, dtype="uint8")
 
     return _impl
@@ -382,8 +392,11 @@ convert_map = {
     'quantized::conv2d_relu': _quantized_conv2d(True),
     'aten::dequantize': _dequantize(),
     'quantized::conv2d': _quantized_conv2d(),
-    'quantized::add_relu': _add(True),
-    'quantized::add': _add(),
+    'quantized::add_relu': _binop(relay.add, True),
+    'quantized::add': _binop(relay.add),
+    'quantized::mul_relu': _binop(relay.multiply, True),
+    'quantized::mul': _binop(relay.multiply),
     'quantized::linear': _linear(),
+    'quantized::linear_relu': _linear(True),
     'quantized::cat': _cat()
 }

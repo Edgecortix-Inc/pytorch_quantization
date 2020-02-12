@@ -903,4 +903,6 @@ convert_map = {
     'aten::tanh'                            : _tanh(),
     'aten::stack'                           : _stack(),
     'aten::mm'                              : _matmul(),
+    #  TODO: this assumes expand_as can be removed because TVM has broadcast op
+    'aten::expand_as'                       : _identity()
 }
