@@ -4,7 +4,7 @@ import torch
 import os
 import warnings
 import torch.quantization
-from torch.quantization.observer import *
+from torch.quantization.observer import MovingAverageMinMaxObserver, default_weight_observer
 
 # from models.qmobilenet_v2  import load_model
 from models.qmobilenet_v3 import load_model
@@ -40,7 +40,7 @@ float_model_file = 'mobilenet_pretrained_float.pth'
 
 # for v3
 saved_model_dir = "data/"
-float_model_file = 'mobilenetv3small-f3be529c.pth'
+float_model_file = 'mobilenetv3_small_67.4.pth.tar'
 
 float_model = load_model(saved_model_dir + float_model_file).to('cpu')
 
@@ -63,7 +63,8 @@ per_tensor_quantized_model.eval()
 # Fuse Conv, bn and relu
 per_tensor_quantized_model.fuse_model()
 
-per_tensor_quantized_model.qconfig = torch.quantization.QConfig(activation=MovingAverageMinMaxObserver.with_args(reduce_range=False),
+act = MovingAverageMinMaxObserver.with_args(reduce_range=False)
+per_tensor_quantized_model.qconfig = torch.quantization.QConfig(activation=act,
                                                                 weight=default_weight_observer)
 print(per_tensor_quantized_model.qconfig)
 torch.quantization.prepare(per_tensor_quantized_model, inplace=True)

@@ -116,7 +116,6 @@ def get_add_scalar_output_quant_param(input_scale, input_zero_point,
         s_prime = (float(z - c_q) - q_min) / (float(q_max) - q_min) * s
         z_prime = q_max
     else:
-        print("Hit else case")
         s_prime = s
         z_prime = z - c_q
 
@@ -160,6 +159,7 @@ def add_input_quant_params_to_op_inputs(graph):
     num_quantized_inputs = {"quantized::conv2d": 1,
                             "quantized::conv2d_relu": 1,
                             "quantized::linear": 1,
+                            "quantized::linear_relu": 1,
                             "quantized::add_relu": 2,
                             "quantized::add": 2,
                             "quantized::mul_relu": 2,
@@ -247,7 +247,6 @@ def _dequantize():
     def _impl(inputs, input_type):
         inp_scale = _expr.const(inputs[1])
         inp_zero_point = _expr.const(inputs[2])
-        print("dequantize scale, zp:", inputs[1], inputs[2])
         return relay.qnn.op.dequantize(inputs[0], inp_scale, inp_zero_point)
     return _impl
 
@@ -454,15 +453,15 @@ def _add_scalar():
         if q_min > z - c_q or q_max < z - c_q:
             dequant = relay.qnn.op.dequantize(inputs[0],
                                               _expr.const(s), _expr.const(z))
-            dequantized_add = _op.tensor.add(dequant, c_q * s)
+            dequantized_add = _op.tensor.add(dequant, _expr.const(c_q * s))
             return relay.qnn.op.quantize(dequantized_add,
                                          _expr.const(s_prime),
                                          _expr.const(z_prime),
                                          axis=1, out_dtype="uint8")
         else:
-            relay.qnn.op.requantize(inputs[0], _expr.const(s), _expr.const(z),
-                                    _expr.const(s_prime), _expr.const(z_prime),
-                                    axis=1, out_dtype="uint8")
+            return relay.qnn.op.requantize(inputs[0], _expr.const(s), _expr.const(z),
+                                           _expr.const(s_prime), _expr.const(z_prime),
+                                           axis=1, out_dtype="uint8")
 
     return _impl
 

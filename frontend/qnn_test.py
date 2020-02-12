@@ -3,7 +3,7 @@ import numpy as np
 import tvm
 from tvm import relay
 import torch
-
+from torch.quantization.observer import MovingAverageMinMaxObserver, default_weight_observer
 from torchvision.models.quantization import resnet as qresnet
 from torchvision.models.quantization import mobilenet as qmobilenet
 from torchvision.models.quantization import inception as qinception
@@ -22,7 +22,10 @@ def quantize_model(model, inp, per_channel=False, use_cuda=False, dummy=True):
     if per_channel:
         model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
     else:
-        model.qconfig = torch.quantization.default_qconfig
+        act = MovingAverageMinMaxObserver.with_args(reduce_range=False)
+        model.qconfig = torch.quantization.QConfig(activation=act,
+                                                   weight=default_weight_observer)
+        # model.qconfig = torch.quantization.default_qconfig
 
     torch.quantization.prepare(model, inplace=True)
 
@@ -51,11 +54,18 @@ def quantize_model(model, inp, per_channel=False, use_cuda=False, dummy=True):
 
 
 qmodels = [
-    ("resnet18", qresnet.resnet18(pretrained=True).eval()),
-    ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
-    ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
-    ("googlenet", qgooglenet(pretrained=True).eval()),
+    # ("resnet18", qresnet.resnet18(pretrained=True).eval()),
+    # ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
+    # ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
+    # ("googlenet", qgooglenet(pretrained=True).eval()),
 ]
+
+import sys
+sys.path.append("../models")
+from qmobilenet_v3 import load_model
+
+model_file = "../data/mobilenetv3_small_67.4.pth.tar"
+qmodels.append(("mobilenet_v3", load_model(model_file).eval()))
 
 results = []
 use_cuda = False  # lower accuacy on torch and tvm when using cuda
@@ -74,10 +84,7 @@ for (model_name, raw_model) in qmodels:
                    use_cuda=use_cuda, dummy=False)
 
     script_module = torch.jit.trace(raw_model, inp.to("cpu")).eval()
-
     mod, params = parse_script_module(script_module, input_shapes)
-    # print(mod)
-    # continue
 
     with torch.no_grad():
         # Quantized models can only run on cpu in torch
