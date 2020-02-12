@@ -6,8 +6,6 @@ from tvm.relay import expr as _expr
 from tvm.relay import op as _op
 from tvm.relay.frontend.common import infer_shape
 
-from util import get_output_name
-
 
 class QuantParam:
     def __init__(self, weight, bias, scale, zero_point, param_key):
@@ -101,6 +99,58 @@ def get_quant_param_for_input(input_value):
     return dfs(input_value.node())
 
 
+def get_add_scalar_output_quant_param(input_scale, input_zero_point,
+                                      scalar):
+    # refer to aten/src/ATen/native/quantized/cpu/qadd.cpp
+    q_min = 0
+    q_max = 255
+    s = input_scale
+    z = input_zero_point
+    c = scalar
+    c_q = round(c / s)
+
+    if q_min > z - c_q:
+        s_prime = (float(q_max) - (z - c_q)) / (float(q_max) - q_min) * s
+        z_prime = q_min
+    elif q_max < z - c_q:
+        s_prime = (float(z - c_q) - q_min) / (float(q_max) - q_min) * s
+        z_prime = q_max
+    else:
+        print("Hit else case")
+        s_prime = s
+        z_prime = z - c_q
+
+    return s_prime, z_prime
+
+
+def add_output_quant_params_to_scalar_op(node, graph,
+                                         input_scale, input_zero_point,
+                                         scalar):
+    operator = node.kind()
+
+    if operator == "quantized::mul_scalar":
+        out_scale = input_scale * scalar
+        out_zero_point = input_zero_point
+    elif operator == "quantized::add_scalar":
+        out_scale, out_zero_point = \
+          get_add_scalar_output_quant_param(input_scale, input_zero_point,
+                                            scalar)
+    else:
+        assert False, "unsupported scalar op: %s" % operator
+
+    # create new constant nodes and add them to graph
+    out_scale_node = graph.create("prim::Constant")
+    out_zero_point_node = graph.create("prim::Constant")
+    out_scale_node.insertBefore(node)
+    out_zero_point_node.insertBefore(node)
+    out_scale_node.f_("value", out_scale)
+    out_zero_point_node.i_("value", out_zero_point)
+    out_scale_node.output().setType(torch._C.FloatType.get())
+    out_zero_point_node.output().setType(torch._C.IntType.get())
+    node.addInput(out_scale_node.output())
+    node.addInput(out_zero_point_node.output())
+
+
 def add_input_quant_params_to_op_inputs(graph):
     # Quantized operators in PyTorch do not take input quant params as
     # arguments. But QNN expects them to be passed in as arguements.
@@ -150,23 +200,15 @@ def add_input_quant_params_to_op_inputs(graph):
                 input_scales.append(scale)
                 input_zero_points.append(zp)
 
-        if operator == "quantized::mul_scalar":
+        if operator in ["quantized::add_scalar", "quantized::mul_scalar"]:
             scalar = node.inputsAt(1).node().f("value")
             assert scalar > 0.0, "only positive scalar supported"
             inp_scale = input_scales[0].node().f("value")
-            inp_zero_point = input_zero_points[1].node().i("value")
-            print("quantized::mul_scalar: scalar, inp scale, inp zp:", scalar, inp_scale, inp_zero_point)
-            out_scale = inp_scale * scalar
-            out_zero_point = inp_zero_point
-            # create new constant nodes and add them to graph
-            out_scale_node = graph.create("prim::Constant")
-            out_zero_point_node = graph.create("prim::Constant")
-            out_scale_node.insertBefore(node)
-            out_zero_point_node.insertBefore(node)
-            out_scale_node.f_("value", out_scale)
-            out_zero_point_node.i_("value", out_zero_point)
-            node.addInput(out_scale_node.output())
-            node.addInput(out_zero_point_node.output())
+            inp_zero_point = input_zero_points[0].node().i("value")
+
+            add_output_quant_params_to_scalar_op(node, graph,
+                                                 inp_scale, inp_zero_point,
+                                                 scalar)
 
         for scale, zp in zip(input_scales, input_zero_points):
             node.addInput(scale)
@@ -396,6 +438,64 @@ def _cat():
     return _impl
 
 
+def _add_scalar():
+    def _impl(inputs, input_type):
+        # refer to aten/src/ATen/native/quantized/cpu/qadd.cpp
+        s_prime = inputs[2]
+        z_prime = inputs[3]
+        assert len(inputs) == 6, "Input quant params not found in op inputs"
+        s = inputs[4]
+        z = inputs[5]
+        c = inputs[1]
+        c_q = round(c / s)
+        q_min = 0
+        q_max = 255
+
+        if q_min > z - c_q or q_max < z - c_q:
+            dequant = relay.qnn.op.dequantize(inputs[0],
+                                              _expr.const(s), _expr.const(z))
+            dequantized_add = _op.tensor.add(dequant, c_q * s)
+            return relay.qnn.op.quantize(dequantized_add,
+                                         _expr.const(s_prime),
+                                         _expr.const(z_prime),
+                                         axis=1, out_dtype="uint8")
+        else:
+            relay.qnn.op.requantize(inputs[0], _expr.const(s), _expr.const(z),
+                                    _expr.const(s_prime), _expr.const(z_prime),
+                                    axis=1, out_dtype="uint8")
+
+    return _impl
+
+
+def _mul_scalar():
+    def _impl(inputs, input_type):
+        output_scale = _expr.const(inputs[2])
+        output_zero_point = _expr.const(inputs[3])
+        assert len(inputs) == 6, "Input quant params not found in op inputs"
+        input_scale = _expr.const(inputs[4])
+        input_zero_point = _expr.const(inputs[5])
+        return relay.qnn.op.requantize(inputs[0], input_scale, input_zero_point,
+                                       output_scale, output_zero_point,
+                                       axis=1, out_dtype="uint8")
+    return _impl
+
+
+def quantize_scalar(data, scale, zero_point):
+    # TODO: make it better
+    transformed = zero_point + data / scale
+    return max(0, min(round(transformed), 255))
+
+
+def _relu6():
+    def _impl(inputs, input_type):
+        assert len(inputs) == 4, "Input quant params not found in op inputs"
+        input_scale = inputs[2]
+        input_zero_point = inputs[3]
+        six = quantize_scalar(6., input_scale, input_zero_point)
+        return _op.tensor.clip(inputs[0], input_zero_point, six)
+    return _impl
+
+
 convert_map = {
     'aten::quantize_per_tensor': _quantize_per_tensor(),
     'quantized::conv2d_relu': _quantized_conv2d(True),
@@ -407,5 +507,8 @@ convert_map = {
     'quantized::mul': _binop(relay.multiply),
     'quantized::linear': _linear(),
     'quantized::linear_relu': _linear(True),
-    'quantized::cat': _cat()
+    'quantized::cat': _cat(),
+    'quantized::add_scalar': _add_scalar(),
+    'quantized::mul_scalar': _mul_scalar(),
+    'quantized::relu6': _relu6()
 }
