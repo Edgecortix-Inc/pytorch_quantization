@@ -28,7 +28,7 @@ def get_qconfig(per_channel):
 
 def quantize_model(model, inp, per_channel=False, use_cuda=False, dummy=True):
     model.fuse_model()
-    model.q_config = get_qconfig(per_channel)
+    model.qconfig = get_qconfig(per_channel)
     torch.quantization.prepare(model, inplace=True)
 
     if dummy:
@@ -58,7 +58,7 @@ def quantize_model(model, inp, per_channel=False, use_cuda=False, dummy=True):
 qmodels = [
     ("resnet18", qresnet.resnet18(pretrained=True).eval()),
     ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
-    ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
+    # ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
     ("googlenet", qgooglenet(pretrained=True).eval()),
 ]
 
@@ -67,7 +67,7 @@ sys.path.append("../models")
 from qmobilenet_v3 import load_model
 
 model_file = "../data/mobilenetv3_small_67.4.pth.tar"
-# qmodels.append(("mobilenet_v3", load_model(model_file).eval()))
+qmodels.append(("mobilenet_v3", load_model(model_file).eval()))
 
 results = []
 use_cuda = False  # lower accuacy on torch and tvm when using cuda
