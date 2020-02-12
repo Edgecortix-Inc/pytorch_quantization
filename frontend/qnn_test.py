@@ -16,17 +16,19 @@ from eval_imagenet_1k import eval_accuracy, wrap_tvm_model
 from eval_imagenet_1k import get_train_loader, download_imagenet_1k
 
 
-def quantize_model(model, inp, per_channel=False, use_cuda=False, dummy=True):
-    model.fuse_model()
-
+def get_qconfig(per_channel):
     if per_channel:
-        model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
+        return torch.quantization.get_default_qconfig('fbgemm')
     else:
         act = MovingAverageMinMaxObserver.with_args(reduce_range=False)
-        model.qconfig = torch.quantization.QConfig(activation=act,
-                                                   weight=default_weight_observer)
-        # model.qconfig = torch.quantization.default_qconfig
+        return torch.quantization.QConfig(activation=act,
+                                          weight=default_weight_observer)
+        # return torch.quantization.default_qconfig
 
+
+def quantize_model(model, inp, per_channel=False, use_cuda=False, dummy=True):
+    model.fuse_model()
+    model.q_config = get_qconfig(per_channel)
     torch.quantization.prepare(model, inplace=True)
 
     if dummy:
@@ -54,10 +56,10 @@ def quantize_model(model, inp, per_channel=False, use_cuda=False, dummy=True):
 
 
 qmodels = [
-    # ("resnet18", qresnet.resnet18(pretrained=True).eval()),
-    # ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
-    # ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
-    # ("googlenet", qgooglenet(pretrained=True).eval()),
+    ("resnet18", qresnet.resnet18(pretrained=True).eval()),
+    ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
+    ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
+    ("googlenet", qgooglenet(pretrained=True).eval()),
 ]
 
 import sys
@@ -65,7 +67,7 @@ sys.path.append("../models")
 from qmobilenet_v3 import load_model
 
 model_file = "../data/mobilenetv3_small_67.4.pth.tar"
-qmodels.append(("mobilenet_v3", load_model(model_file).eval()))
+# qmodels.append(("mobilenet_v3", load_model(model_file).eval()))
 
 results = []
 use_cuda = False  # lower accuacy on torch and tvm when using cuda
