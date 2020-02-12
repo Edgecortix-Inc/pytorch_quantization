@@ -4,7 +4,7 @@ import torch
 import os
 import warnings
 import torch.quantization
-
+from torch.quantization.observer import *
 
 # from models.qmobilenet_v2  import load_model
 from models.qmobilenet_v3 import load_model
@@ -28,8 +28,10 @@ torch.manual_seed(191009)
 
 def print_size_of_model(model):
     torch.save(model.state_dict(), "temp.p")
-    print('Size (MB):', os.path.getsize("temp.p")/1e6)
+    size = os.path.getsize("temp.p")/1e6
+    print('Size (MB):', size)
     os.remove('temp.p')
+    return size
 
 
 # for v2
@@ -37,8 +39,8 @@ saved_model_dir = 'data/'
 float_model_file = 'mobilenet_pretrained_float.pth'
 
 # for v3
-saved_model_dir = "/home/masa/work/edgecortix/MobilenetV3/"
-float_model_file = 'mobilenetv3_small_67.4.pth.tar'
+saved_model_dir = "data/"
+float_model_file = 'mobilenetv3small-f3be529c.pth'
 
 float_model = load_model(saved_model_dir + float_model_file).to('cpu')
 
@@ -51,7 +53,7 @@ float_model.fuse_model()
 print('\n Inverted Residual Block: After fusion\n\n',float_model.features[1].conv)
 
 print("Size of baseline model")
-print_size_of_model(float_model)
+original_size = print_size_of_model(float_model)
 
 top1_fp32, top5_fp32 = eval_accuracy(float_model)
 print('\nFP32 accuracy: %2.2f' % top1_fp32.avg)
@@ -61,13 +63,15 @@ per_tensor_quantized_model.eval()
 # Fuse Conv, bn and relu
 per_tensor_quantized_model.fuse_model()
 
-per_tensor_quantized_model.qconfig = torch.quantization.default_qconfig
+per_tensor_quantized_model.qconfig = torch.quantization.QConfig(activation=MovingAverageMinMaxObserver.with_args(reduce_range=False),
+                                                                weight=default_weight_observer)
 print(per_tensor_quantized_model.qconfig)
 torch.quantization.prepare(per_tensor_quantized_model, inplace=True)
 
 # Calibrate first
 print('Post Training Quantization Prepare: Inserting Observers')
 print('\n Inverted Residual Block:After observer insertion \n\n', per_tensor_quantized_model.features[1].conv)
+
 
 # Calibrate with the training set
 for image, _ in get_train_loader("imagenet_1k"):
@@ -81,7 +85,7 @@ print('Post Training Quantization: Convert done')
 print('\n Inverted Residual Block: After fusion and quantization, note fused modules: \n\n', per_tensor_quantized_model.features[1].conv)
 
 print("Size of model after quantization")
-print_size_of_model(per_tensor_quantized_model)
+quantized_size = print_size_of_model(per_tensor_quantized_model)
 
 top1_per_tensor, top5_per_tensor = eval_accuracy(per_tensor_quantized_model)
 print('Per tensor quantization accuracy: %2.2f' % top1_per_tensor.avg)
@@ -103,3 +107,4 @@ top1_per_channel, top5_per_channel = eval_accuracy(per_channel_quantized_model)
 print('\nFP32 accuracy: %2.2f' % top1_fp32.avg)
 print('Per tensor quantization accuracy: %2.2f' % top1_per_tensor.avg)
 print('Per channel quantization accuracy: %2.2f' % top1_per_channel.avg)
+print('Model compression ratio (original to quantized): ', original_size/quantized_size)
