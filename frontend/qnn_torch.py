@@ -79,7 +79,8 @@ def get_quant_param_for_input(input_value):
         "quantized::add": (2, 3),
         "quantized::mul_relu": (2, 3),
         "quantized::mul": (2, 3),
-        "quantized::cat": (2, 3)
+        "quantized::cat": (2, 3),
+        "quantized::mul_scalar": (2, 3)
     }
 
     def dfs(current_node):
@@ -100,7 +101,12 @@ def get_quant_param_for_input(input_value):
     return dfs(input_value.node())
 
 
-def get_input_quant_param_mapping(graph):
+def add_input_quant_params_to_op_inputs(graph):
+    # Quantized operators in PyTorch do not take input quant params as
+    # arguments. But QNN expects them to be passed in as arguements.
+    # To simplify the translation of inputs, we add input quant params
+    # to inputs of PyTorch quantized operator nodes. See _impl in
+    #  _quantized_conv2d() below for example of why this is helpful.
     num_quantized_inputs = {"quantized::conv2d": 1,
                             "quantized::conv2d_relu": 1,
                             "quantized::linear": 1,
@@ -111,57 +117,60 @@ def get_input_quant_param_mapping(graph):
                             "aten::dequantize": 1,
                             "aten::mean": 1,
                             "quantized::relu6": 1,
-                            }
+                            "quantized::add_scalar": 1,
+                            "quantized::mul_scalar": 1,
+                            'quantized::relu6': 1}
+
     need_input_quant_param = set(num_quantized_inputs.keys())
     need_input_quant_param.add("quantized::cat")
 
-    mapping = {}
     for node in graph.nodes():
         operator = node.kind()
         if operator not in need_input_quant_param:
             continue
 
-        node_name = get_output_name(node)
-        mapping[node_name] = {}
-        mapping[node_name]["input_scales"] = []
-        mapping[node_name]["input_zero_points"] = []
+        input_scales = []
+        input_zero_points = []
 
         if operator == "quantized::cat":
             inputs = node.inputsAt(0).node().inputs()
             for inp in inputs:
                 scale, zp = get_quant_param_for_input(inp)
-                mapping[node_name]["input_scales"].append(scale)
-                mapping[node_name]["input_zero_points"].append(zp)
-            # print("\nquant param for the cat node ", node_name)
-            # print(mapping[node_name]["input_scales"])
-            # print(mapping[node_name]["input_zero_points"])
+                input_scales.append(scale)
+                input_zero_points.append(zp)
+                # print("\nquant param for the cat node ", node_name)
+                # print(mapping[node_name]["input_scales"])
+                # print(mapping[node_name]["input_zero_points"])
         else:
             for i in range(num_quantized_inputs[operator]):
                 scale, zp = get_quant_param_for_input(node.inputsAt(i))
                 # print("\nquant param for the node ", node_name)
                 # print(scale)
                 # print(zp)
-                mapping[node_name]["input_scales"].append(scale)
-                mapping[node_name]["input_zero_points"].append(zp)
+                input_scales.append(scale)
+                input_zero_points.append(zp)
 
-    return mapping
+        if operator == "quantized::mul_scalar":
+            scalar = node.inputsAt(1).node().f("value")
+            assert scalar > 0.0, "only positive scalar supported"
+            inp_scale = input_scales[0].node().f("value")
+            inp_zero_point = input_zero_points[1].node().i("value")
+            print("quantized::mul_scalar: scalar, inp scale, inp zp:", scalar, inp_scale, inp_zero_point)
+            out_scale = inp_scale * scalar
+            out_zero_point = inp_zero_point
+            # create new constant nodes and add them to graph
+            out_scale_node = graph.create("prim::Constant")
+            out_zero_point_node = graph.create("prim::Constant")
+            out_scale_node.insertBefore(node)
+            out_zero_point_node.insertBefore(node)
+            out_scale_node.f_("value", out_scale)
+            out_zero_point_node.i_("value", out_zero_point)
+            node.addInput(out_scale_node.output())
+            node.addInput(out_zero_point_node.output())
 
-
-def add_input_quant_params_to_op_inputs(graph):
-    # Quantized operators in PyTorch do not take input quant params as
-    # arguments. But QNN expects them to be passed in as arguements.
-    # To simplify the translation of inputs, we add input quant params
-    # to inputs of PyTorch quantized operator nodes. See _impl in
-    #  _quantized_conv2d() below for example of why this is helpful.
-    param_mapping = get_input_quant_param_mapping(graph)
-    for node in graph.nodes():
-        node_name = get_output_name(node)
-        if node_name in param_mapping:
-            scales = param_mapping[node_name]["input_scales"]
-            zps = param_mapping[node_name]["input_zero_points"]
-            for scale, zp in zip(scales, zps):
-                node.addInput(scale)
-                node.addInput(zp)
+        for scale, zp in zip(input_scales, input_zero_points):
+            node.addInput(scale)
+            node.addInput(zp)
 
 
 def add_quant_params(params, quant_params):
