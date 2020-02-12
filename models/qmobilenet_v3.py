@@ -1,47 +1,46 @@
 import torch
 from torch import nn
-from torchvision.models.utils import load_state_dict_from_url
 from torch.quantization import QuantStub, DeQuantStub, fuse_modules
-# from .utils import _replace_relu, quantize_model
-import torch.nn.functional as F
 
 
-
-def conv_bn(inp, oup, stride, conv_layer=nn.Conv2d, norm_layer=nn.BatchNorm2d, nlin_layer=nn.ReLU):
+def conv_bn(inp, oup, stride, conv_layer=nn.Conv2d,
+            norm_layer=nn.BatchNorm2d, nlin_layer=nn.ReLU):
     return nn.Sequential(
         conv_layer(inp, oup, 3, stride, 1, bias=False),
         norm_layer(oup),
         nlin_layer(inplace=True)
     )
 
-def conv_1x1_bn(inp, oup, conv_layer=nn.Conv2d, norm_layer=nn.BatchNorm2d, nlin_layer=nn.ReLU):
+
+def conv_1x1_bn(inp, oup, conv_layer=nn.Conv2d,
+                norm_layer=nn.BatchNorm2d, nlin_layer=nn.ReLU):
     return nn.Sequential(
         conv_layer(inp, oup, 1, 1, 0, bias=False),
         norm_layer(oup),
         nlin_layer(inplace=True)
     )
 
+
 class Hswish(nn.Module):
     def __init__(self, inplace=True):
         super(Hswish, self).__init__()
-        self.inplace = inplace
-        self.skip_add = nn.quantized.FloatFunctional()
-        self.fmul = nn.quantized.FloatFunctional()
+        self.float_op = nn.quantized.FloatFunctional()
+        self.relu6 = nn.ReLU6(inplace=inplace)
 
     def forward(self, x):
+        relu6 = self.relu6(self.float_op.add_scalar(x, 3.))
+        return self.float_op.mul(x, self.float_op.mul_scalar(relu6, 1/6.))
 
-        return self.fmul.mul(x, F.relu(self.skip_add.add_scalar(x, 3.)))
-        #return x * F.relu6(self.skip_add.add_scalar(x, 3.), inplace=inplace)
 
 class Hsigmoid(nn.Module):
     def __init__(self, inplace=True):
         super(Hsigmoid, self).__init__()
-        self.inplace = inplace
-        self.skip_add = nn.quantized.FloatFunctional()
+        self.float_op = nn.quantized.FloatFunctional()
+        self.relu6 = nn.ReLU6(inplace=inplace)
 
     def forward(self, x):
-
-        return F.relu(self.skip_add.add_scalar(x, 3.))
+        relu6 = self.relu6(self.float_op.add_scalar(x, 3.))
+        return self.float_op.mul_scalar(relu6, 1/6.)
 
 
 class SEModule(nn.Module):
@@ -53,10 +52,7 @@ class SEModule(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(channel // reduction, channel, bias=False),
             Hsigmoid()
-            #nn.Sigmoid()
-            #nn.ReLU(inplace=True)
         )
-
         self.fmul = nn.quantized.FloatFunctional()
 
     def forward(self, x):
@@ -64,6 +60,7 @@ class SEModule(nn.Module):
         y = self.avg_pool(x).view(b, c)
         y = self.fc(y).view(b, c, 1, 1)
         return self.fmul.mul(x, y.expand_as(x))
+
 
 class Identity(nn.Module):
     def __init__(self, channel):
@@ -77,20 +74,6 @@ def make_divisible(x, divisible_by=8):
     import numpy as np
     return int(np.ceil(x * 1. / divisible_by) * divisible_by)
 
-"""
-class ConvBN(nn.Sequential):
-    def __init__(self, in_planes, out_planes, kernel_size=3, stride=1, padding=0, nlin_layer=nn.ReLU):
-
-
-        super(ConvBN, self).__init__(
-            nn.Conv2d(in_planes, out_planes, kernel_size, stride, padding, bias=False),
-            nn.BatchNorm2d(out_planes),
-            # Replace with ReLU
-#            nn.ReLU(inplace=False)
-
-        )
-
-"""
 
 class MobileBottleneck(nn.Module):
     def __init__(self, inp, oup, kernel, stride, exp, se=False, nl='RE'):
@@ -100,8 +83,6 @@ class MobileBottleneck(nn.Module):
         padding = (kernel - 1) // 2
         self.use_res_connect = stride == 1 and inp == oup
 
-        #conv_layer = nn.Conv2d
-        #norm_layer = nn.BatchNorm2d
         if nl == 'RE':
             nlin_layer = nn.ReLU # or ReLU6
         elif nl == 'HS':
@@ -113,12 +94,8 @@ class MobileBottleneck(nn.Module):
         else:
             SELayer = Identity
 
-
-
         self.conv = nn.Sequential(
             # pw
-
-            #ConvBNReLU(inp, exp, 1, 1, 0, nlin_layer),
             nn.Conv2d(inp, exp, 1, 1, 0, bias=False),
             nn.BatchNorm2d(exp),
             nlin_layer(inplace=True),
@@ -133,16 +110,16 @@ class MobileBottleneck(nn.Module):
         )
         self.skip_add = nn.quantized.FloatFunctional()
 
-
     def forward(self, x):
         if self.use_res_connect:
-            #skip_add = nn.quantized.FloatFunctional()
             return self.skip_add.add(x, self.conv(x))
         else:
             return self.conv(x)
 
+
 class MobileNetV3(nn.Module):
-    def __init__(self, n_class=1000, input_size=224, dropout=0.2, mode='small', width_mult=1.0):
+    def __init__(self, n_class=1000, input_size=224,
+                 dropout=0.2, mode='small', width_mult=1.0):
         super(MobileNetV3, self).__init__()
         input_channel = 16
         last_channel = 1280
@@ -189,16 +166,9 @@ class MobileNetV3(nn.Module):
         assert input_size % 32 == 0
 
         self.last_channel = make_divisible(last_channel * width_mult) if width_mult > 1.0 else last_channel
-        #features = [ConvBNReLU(3, input_channel, 3, 2, 1, nlin_layer=Hswish)]
-        #self.conv = ConvBN(3,input_channel,3,2,1)
-        #features = [nn.sequential(self.conv, Hswish(inplace=True)]
         self.features = [nn.Sequential(nn.Conv2d(3, input_channel, 3, 2, 1, bias=False),
                         nn.BatchNorm2d(input_channel),
                         Hswish(inplace=True))]
-        #features.append(nn.BatchNorm2d(input_channel))
-        #features.append(Hswish(inplace=True))
-        #self.features = [ConvBN(3, input_channel, 3, 2, 1)]
-        #self.features.append(Hswish(inplace=True))
         self.classifier = []
 
         # building mobile blocks
@@ -211,7 +181,6 @@ class MobileNetV3(nn.Module):
         # building last several layers
         if mode == 'large':
             last_conv = make_divisible(960 * width_mult)
-            #features.append(ConvBNReLU(input_channel, last_conv, 1, 1, 0, nlin_layer=Hswish))
             self.features.append(nn.Conv2d(input_channel, last_conv, 1, 1, 0))
             self.features.append(nn.BatchNorm2d(last_conv))
             self.features.append(Hswish(inplace=True))
@@ -220,15 +189,9 @@ class MobileNetV3(nn.Module):
             self.features.append(Hswish(inplace=True))
         elif mode == 'small':
             last_conv = make_divisible(576 * width_mult)
-            #features.append(ConvBNReLU(input_channel, last_conv, 1, 1, 0, nlin_layer=Hswish))
             self.features.append(nn.Sequential(nn.Conv2d(input_channel, last_conv, 1, 1, 0, bias=False),
                                  nn.BatchNorm2d(last_conv),
                                  Hswish(inplace=True)))
-            #features.append(nn.BatchNorm2d(last_conv))
-            #features.append(Hswish(inplace=True))
-            #self.features.append(SEModule(last_conv))  # refer to paper Table2, but I think this is a mistake
-            #self.features.append(ConvBN(input_channel, last_conv, 1, 1, 0))
-            #self.features.append(Hswish(inplace=True))
             self.features.append(nn.AdaptiveAvgPool2d(1))
             self.features.append(nn.Conv2d(last_conv, last_channel, 1, 1, 0))
             self.features.append(Hswish(inplace=True))
@@ -292,7 +255,7 @@ class MobileNetV3(nn.Module):
 
 
 def load_model(model_file):
-    state_dict = torch.load(model_file)
+    state_dict = torch.load(model_file, map_location=torch.device('cpu'))
     model = MobileNetV3()
     from collections import OrderedDict
     new_state_dict = OrderedDict()
@@ -301,4 +264,4 @@ def load_model(model_file):
         new_state_dict[name] = v
     model.load_state_dict(new_state_dict)
     model.to('cpu')
-    return MobileNetV3()
+    return model
