@@ -18,7 +18,6 @@ from eval_imagenet_1k import get_train_loader, download_imagenet_1k
 def quantize_model(model, inp, use_cuda=False, dummy=True):
     model.fuse_model()
     model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
-    model.qconfig = torch.quantization.default_qconfig
     torch.quantization.prepare(model, inplace=True)
 
     if dummy:
@@ -67,7 +66,7 @@ class AnnotatedConvBnModel(torch.nn.Module):
 class AnnotatedSingleLayerLinearModel(torch.nn.Module):
     def __init__(self):
         super(AnnotatedSingleLayerLinearModel, self).__init__()
-        self.fc1 = QuantWrapper(torch.nn.Linear(5, 5).to(dtype=torch.float))
+        self.fc1 = QuantWrapper(torch.nn.Linear(5, 10).to(dtype=torch.float))
 
     def forward(self, x):
         x = self.fc1(x)
@@ -78,9 +77,9 @@ class AnnotatedSingleLayerLinearModel(torch.nn.Module):
 
 
 qmodels = [
-    ("conv", AnnotatedConvBnModel().eval())
-    # ("linear", AnnotatedSingleLayerLinearModel().eval())
-    #("resnet18", qresnet.resnet18(pretrained=True).eval()),
+    # ("conv", (1, 3, 224, 224), AnnotatedConvBnModel().eval()),
+    ("linear", (5, 5), AnnotatedSingleLayerLinearModel().eval())
+    # ("resnet18", (1, 3, 224, 224), qresnet.resnet18(pretrained=True).eval()),
     # ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
     # ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
     # ("googlenet", qgooglenet(pretrained=True).eval()),
@@ -100,9 +99,9 @@ else:
 results = []
 use_cuda = False  # lower accuacy on torch and tvm when using cuda
 
-for (model_name, raw_model) in qmodels:
+for (model_name, ishape, raw_model) in qmodels:
     input_name = 'X'
-    input_shapes = {input_name: (1, 3, 224, 224)}
+    input_shapes = {input_name: ishape}
     inp = torch.rand(input_shapes[input_name], dtype=torch.float)
     tvm_inp = inp.numpy().copy()
 

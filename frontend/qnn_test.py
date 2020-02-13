@@ -66,6 +66,7 @@ if version.parse(torch.__version__) > version.parse("1.4.0"):
 else:
     print("Mobilenet v3 test requires a nightly build via pip, skipping.")
 
+per_channel = True
 results = []
 
 for (model_name, raw_model) in qmodels:
@@ -74,7 +75,7 @@ for (model_name, raw_model) in qmodels:
     inp = torch.rand(input_shapes[input_name], dtype=torch.float)
     tvm_inp = inp.numpy().copy()
 
-    quantize_model(raw_model, inp, per_channel=False, dummy=False)
+    quantize_model(raw_model, inp, per_channel=per_channel, dummy=True)
 
     script_module = torch.jit.trace(raw_model, inp).eval()
     mod, params = parse_script_module(script_module, input_shapes)

@@ -402,9 +402,11 @@ def _linear(with_relu=False):
         input_scale = _expr.const(inputs[4])
         input_zero_point = _expr.const(inputs[5])
 
+        weight_shape = infer_shape(weight)
         dense = relay.qnn.op.dense(inputs[0], weight,
                                    input_zero_point, weight_zero_point,
-                                   input_scale, weight_scale)
+                                   input_scale, weight_scale,
+                                   units=weight_shape[0])
 
         requant_input_scale = _expr.const(inputs[4] * get_numpy(weight_scale))
         bias_var = inputs[1][3]
@@ -446,7 +448,7 @@ def _cat():
             dequantized.append(relay.qnn.op.dequantize(inputs[0][i],
                                                        inp_scale, inp_zp))
 
-        concat = _op.tensor.concatenate(dequantized, axis=axis),
+        concat = _op.tensor.concatenate(dequantized, axis=axis)
         return relay.qnn.op.quantize(concat, output_scale, output_zero_point,
                                      axis=1, out_dtype="uint8")
 
