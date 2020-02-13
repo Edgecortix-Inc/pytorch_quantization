@@ -4,6 +4,14 @@ from torch import nn
 from torch.quantization import QuantStub, DeQuantStub, fuse_modules
 
 
+def make_divisible(x, divisible_by=8):
+    return int(np.ceil(x * 1. / divisible_by) * divisible_by)
+
+
+def num_children(mod):
+    return len(list(mod.children()))
+
+
 class Hsigmoid(nn.Module):
     def __init__(self, inplace=True):
         super(Hsigmoid, self).__init__()
@@ -50,10 +58,6 @@ class Identity(nn.Module):
 
     def forward(self, x):
         return x
-
-
-def make_divisible(x, divisible_by=8):
-    return int(np.ceil(x * 1. / divisible_by) * divisible_by)
 
 
 class MobileBottleneck(nn.Module):
@@ -224,15 +228,18 @@ class MobileNetV3(nn.Module):
             if isinstance(m, SEModule):
                 for idx in range(len(m.fc)):
                     if isinstance(m.fc[idx], nn.Linear) and \
-                       isinstance(m.fc[idx+1], nn.ReLU):
-                        fuse_modules(m.fc, [str(idx), str(idx+1)],
+                       isinstance(m.fc[idx + 1], nn.ReLU):
+                        fuse_modules(m.fc, [str(idx), str(idx + 1)],
                                      inplace=True)
             if isinstance(m, MobileBottleneck):
                 for idx in range(len(m.conv)):
                     if isinstance(m.conv[idx],  nn.Conv2d):
-                        fuse_modules(m.conv, [str(idx), str(idx+1)],
-                                     inplace=True)
-            if isinstance(m, nn.Sequential) and len(list(m.children())) == 3:
+                        indices = [str(idx), str(idx + 1)]  # Conv2d + BN
+                        if num_children(m.conv) > idx + 2 and \
+                           isinstance(m.conv[idx + 2], nn.ReLU):
+                            indices.append(str(idx + 2))
+                        fuse_modules(m.conv, indices, inplace=True)
+            if isinstance(m, nn.Sequential) and num_children(m) == 3:
                 fuse_modules(m, ['0', '1'], inplace=True)
 
 

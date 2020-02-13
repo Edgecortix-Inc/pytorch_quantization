@@ -171,6 +171,8 @@ def add_input_quant_params_to_op_inputs(graph):
                             "quantized::mul": 2,
                             "aten::dequantize": 1,
                             "aten::mean": 1,
+                            "aten::relu_": 1,
+                            "aten::relu": 1,
                             "quantized::add_scalar": 1,
                             "quantized::mul_scalar": 1,
                             'quantized::relu6': 1}
@@ -237,6 +239,11 @@ def quantized_mean(data, input_scale, input_zero_point, func):
     out = func(dequantized)
     return relay.qnn.op.quantize(out, input_scale, input_zero_point,
                                  out_dtype="uint8", axis=1)
+
+
+def quantized_relu(data, input_zero_point):
+    zp = _op.cast(input_zero_point, dtype="uint8")
+    return _op.tensor.maximum(data, zp)
 
 
 def _quantize_per_tensor():
@@ -368,14 +375,15 @@ def _binop(relay_op, with_relu=False):
                                           input_scale_rhs,
                                           input_zero_point_rhs)
         fp32_out = relay_op(lhs, rhs)
-        out = relay.qnn.op.quantize(fp32_out,
-                                    output_scale,
-                                    output_zero_point)
+
         if with_relu:
-            return _op.nn.relu(out)
+            fp32_out = _op.nn.relu(fp32_out)
 
-        return out
-
+        return relay.qnn.op.quantize(fp32_out,
+                                     output_scale,
+                                     output_zero_point,
+                                     axis=-1,
+                                     out_dtype="uint8")
     return _impl
 
 

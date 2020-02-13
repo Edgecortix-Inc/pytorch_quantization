@@ -3,8 +3,7 @@ import numpy as np
 import tvm
 from tvm import relay
 import torch
-from torch.quantization.observer import MovingAverageMinMaxObserver, default_weight_observer
-# from torchvision.models.quantization import shufflenetv2 as qshufflenetv2
+
 from torch import nn
 from torch.quantization import QuantStub, DeQuantStub, fuse_modules
 from torch_frontend import parse_script_module
@@ -14,9 +13,6 @@ def get_qconfig(per_channel):
     if per_channel:
         return torch.quantization.get_default_qconfig('fbgemm')
     else:
-        # act = MovingAverageMinMaxObserver.with_args(reduce_range=False)
-        # return torch.quantization.QConfig(activation=act,
-        #                                   weight=default_weight_observer)
         return torch.quantization.default_qconfig
 
 
@@ -131,8 +127,7 @@ class MobileBottleneck(nn.Module):
         if nl == 'RE':
             nlin_layer = nn.ReLU  # or ReLU6
         elif nl == 'HS':
-            # nlin_layer = Hswish
-            nlin_layer = Hsigmoid
+            nlin_layer = Hswish
         else:
             raise NotImplementedError
         if se:
@@ -143,11 +138,11 @@ class MobileBottleneck(nn.Module):
         self.conv = nn.Sequential(
             nn.Conv2d(inp, exp, 1, 1, 0, bias=False),
             nn.BatchNorm2d(exp),
-            # nlin_layer(inplace=True),
+            nlin_layer(inplace=True),
             nn.Conv2d(exp, exp, kernel, stride, padding, groups=exp, bias=False),
             nn.BatchNorm2d(exp),
-            # SELayer(exp),
-            # nlin_layer(inplace=True),
+            SELayer(exp),
+            nlin_layer(inplace=True),
             nn.Conv2d(exp, oup, 1, 1, 0, bias=False),
             nn.BatchNorm2d(oup),
         )
@@ -166,13 +161,16 @@ class MobileBottleneck(nn.Module):
     def fuse_model(self):
         for idx in range(len(self.conv)):
             if type(self.conv[idx]) == nn.Conv2d and type(self.conv[idx+1]) == nn.BatchNorm2d:
-                fuse_modules(self.conv, [str(idx), str(idx+1)], inplace=True)
+                indices = [str(idx), str(idx+1)]
+                if len(list(self.conv.children())) > idx+2 and isinstance(self.conv[idx+2], nn.ReLU):
+                    indices.append(str(idx+2))
+                fuse_modules(self.conv, indices, inplace=True)
 
 
 qmodels = [
-   # ("hsigmoid", Hsigmoid(add_stub=True).eval()),
-   # ("hswish", Hswish(add_stub=True).eval()),
-   # ("semodule", SEModule(16, add_stub=True).eval())
+   ("hsigmoid", Hsigmoid(add_stub=True).eval()),
+   ("hswish", Hswish(add_stub=True).eval()),
+   ("semodule", SEModule(16, add_stub=True).eval())
 ]
 
 mobile_setting = [

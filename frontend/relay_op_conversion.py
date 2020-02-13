@@ -157,6 +157,10 @@ def _get_fill_value(input_types, int_val):
 def _relu():
     def _impl(inputs, input_types):
         data = inputs[0]
+        if input_types[0] == "quint8":
+            assert len(inputs) == 3, "Input quant param not found in op inputs"
+            input_zero_point = _expr.const(inputs[2])
+            return qnn_torch.quantized_relu(data, input_zero_point)
         return _op.nn.relu(data)
     return _impl
 
@@ -608,6 +612,7 @@ def _mean():
             return _op.mean(x, axis, keepdims, exclude)
 
         if input_types[0] == "quint8":
+            assert len(inputs) == 6, "Input quant param not found in op inputs"
             input_scale = _expr.const(inputs[4])
             input_zero_point = _expr.const(inputs[5])
             return qnn_torch.quantized_mean(data, input_scale,
