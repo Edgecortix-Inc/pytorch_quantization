@@ -377,7 +377,7 @@ def parse_script_module(script_module, input_shapes):
     output_index_map = dict(zip(input_vars.keys(), range(len(outputs))))
     ret_name = get_input_names(graph.return_node())[0]
 
-    if len(packed_param_map) > 0:  # quantized model
+    if True or len(packed_param_map) > 0:  # quantized model
         qnn_torch.add_input_quant_params_to_op_inputs(graph)
         weight_quant_params = qnn_torch.get_weight_quant_params(params)
         qnn_torch.add_quant_params_to_outputs(outputs, output_index_map,
@@ -385,6 +385,7 @@ def parse_script_module(script_module, input_shapes):
                                               weight_quant_params)
         qnn_torch.add_quant_params(tvm_params, weight_quant_params)
         convert_map.update(qnn_torch.convert_map)
+#        print(graph)
 
     body = parse_operators(parse_ops(graph.nodes()), outputs,
                            output_index_map, ret_name)

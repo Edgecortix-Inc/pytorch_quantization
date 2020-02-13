@@ -12,6 +12,8 @@ from tvm.relay.frontend.common import infer_value as _infer_value
 from tvm.relay.frontend.common import infer_type as _infer_type
 
 import qnn_torch
+from util import identity
+
 
 def wrap_const(c):
     if not isinstance(c, _expr.Expr):
@@ -155,6 +157,10 @@ def _get_fill_value(input_types, int_val):
 def _relu():
     def _impl(inputs, input_types):
         data = inputs[0]
+        if input_types[0] == "quint8":
+            assert len(inputs) == 3, "Input quant param not found in op inputs"
+            input_zero_point = _expr.const(inputs[2])
+            return qnn_torch.quantized_relu(data, input_zero_point)
         return _op.nn.relu(data)
     return _impl
 
@@ -606,6 +612,7 @@ def _mean():
             return _op.mean(x, axis, keepdims, exclude)
 
         if input_types[0] == "quint8":
+            assert len(inputs) == 6, "Input quant param not found in op inputs"
             input_scale = _expr.const(inputs[4])
             input_zero_point = _expr.const(inputs[5])
             return qnn_torch.quantized_mean(data, input_scale,
@@ -759,12 +766,6 @@ def _upsample(method):
     return _impl
 
 
-def _identity():
-    def _impl(inputs, input_types):
-        return inputs[0]
-    return _impl
-
-
 def _floor():
     def _impl(inputs, input_types):
         data = inputs[0]
@@ -893,7 +894,7 @@ convert_map = {
     'aten::sqrt'                            : _sqrt(),
     'aten::zeros_like'                      : _zeros_like(),
     'aten::upsample_bilinear2d'             : _upsample("bilinear"),
-    'aten::detach'                          : _identity(),
+    'aten::detach'                          : identity(),
     'aten::floor'                           : _floor(),
     'aten::lt'                              : _lt(),
     'aten::gt'                              : _gt(),
@@ -903,4 +904,6 @@ convert_map = {
     'aten::tanh'                            : _tanh(),
     'aten::stack'                           : _stack(),
     'aten::mm'                              : _matmul(),
+    #  TODO: this assumes expand_as can be removed because TVM has broadcast op
+    'aten::expand_as'                       : identity()
 }
