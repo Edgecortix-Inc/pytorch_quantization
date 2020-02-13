@@ -24,8 +24,8 @@ def get_loader(dataset, batch_size, sampler):
 def get_train_loader(data_path):
     traindir = os.path.join(data_path, 'train')
     dataset = torchvision.datasets.ImageFolder(traindir, get_transform())
-    train_sampler = torch.utils.data.RandomSampler(dataset)
-    train_batch_size = 10
+    train_sampler = torch.utils.data.SequentialSampler(dataset)
+    train_batch_size = 30
 
     return get_loader(dataset, train_batch_size, train_sampler)
 
@@ -109,9 +109,10 @@ def evaluate(model, data_loader, neval_batches, use_cuda):
 
             cnt += 1
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            print('.', end='')
+
             top1.update(acc1[0], image.size(0))
             top5.update(acc5[0], image.size(0))
+
             if cnt >= neval_batches:
                 return top1, top5
 
