@@ -438,13 +438,13 @@ def _cat():
 
         for i in range(0, num_inputs):
             inp_scale = _expr.const(inputs[4+i*2])
-            inp_zero_point = _expr.const(inputs[4+i*2+1])
+            inp_zp = _expr.const(inputs[4+i*2+1])
             dequantized.append(relay.qnn.op.dequantize(inputs[0][i],
-                                                       inp_scale, inp_zero_point))
+                                                       inp_scale, inp_zp))
 
-        return relay.qnn.op.quantize(_op.tensor.concatenate(dequantized, axis=axis),
-                                     output_scale,
-                                     output_zero_point)
+        concat = _op.tensor.concatenate(dequantized, axis=axis),
+        return relay.qnn.op.quantize(concat, output_scale, output_zero_point)
+
     return _impl
 
 
