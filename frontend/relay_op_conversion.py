@@ -12,6 +12,8 @@ from tvm.relay.frontend.common import infer_value as _infer_value
 from tvm.relay.frontend.common import infer_type as _infer_type
 
 import qnn_torch
+from util import identity
+
 
 def wrap_const(c):
     if not isinstance(c, _expr.Expr):
@@ -759,12 +761,6 @@ def _upsample(method):
     return _impl
 
 
-def _identity():
-    def _impl(inputs, input_types):
-        return inputs[0]
-    return _impl
-
-
 def _floor():
     def _impl(inputs, input_types):
         data = inputs[0]
@@ -893,7 +889,7 @@ convert_map = {
     'aten::sqrt'                            : _sqrt(),
     'aten::zeros_like'                      : _zeros_like(),
     'aten::upsample_bilinear2d'             : _upsample("bilinear"),
-    'aten::detach'                          : _identity(),
+    'aten::detach'                          : identity(),
     'aten::floor'                           : _floor(),
     'aten::lt'                              : _lt(),
     'aten::gt'                              : _gt(),
@@ -904,5 +900,5 @@ convert_map = {
     'aten::stack'                           : _stack(),
     'aten::mm'                              : _matmul(),
     #  TODO: this assumes expand_as can be removed because TVM has broadcast op
-    'aten::expand_as'                       : _identity()
+    'aten::expand_as'                       : identity()
 }

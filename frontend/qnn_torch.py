@@ -5,7 +5,7 @@ from tvm import relay
 from tvm.relay import expr as _expr
 from tvm.relay import op as _op
 from tvm.relay.frontend.common import infer_shape
-
+from util import identity
 
 class QuantParam:
     def __init__(self, weight, bias, scale, zero_point, param_key):
@@ -73,12 +73,14 @@ def get_quant_param_for_input(input_value):
         "quantized::conv2d": (6, 7),
         "quantized::conv2d_relu": (6, 7),
         "quantized::linear": (2, 3),
+        "quantized::linear_relu": (2, 3),
         "quantized::add_relu": (2, 3),
         "quantized::add": (2, 3),
         "quantized::mul_relu": (2, 3),
         "quantized::mul": (2, 3),
         "quantized::cat": (2, 3),
-        "quantized::mul_scalar": (2, 3)
+        "quantized::mul_scalar": (2, 3),
+        "quantized::add_scalar": (2, 3)
     }
 
     def dfs(current_node):
@@ -110,12 +112,15 @@ def get_add_scalar_output_quant_param(input_scale, input_zero_point,
     c_q = round(c / s)
 
     if q_min > z - c_q:
+        print("hit first case")
         s_prime = (float(q_max) - (z - c_q)) / (float(q_max) - q_min) * s
         z_prime = q_min
     elif q_max < z - c_q:
+        print("hit second case")
         s_prime = (float(z - c_q) - q_min) / (float(q_max) - q_min) * s
         z_prime = q_max
     else:
+        print("hit else case")
         s_prime = s
         z_prime = z - c_q
 
@@ -166,7 +171,6 @@ def add_input_quant_params_to_op_inputs(graph):
                             "quantized::mul": 2,
                             "aten::dequantize": 1,
                             "aten::mean": 1,
-                            "quantized::relu6": 1,
                             "quantized::add_scalar": 1,
                             "quantized::mul_scalar": 1,
                             'quantized::relu6': 1}
@@ -440,8 +444,6 @@ def _cat():
 def _add_scalar():
     def _impl(inputs, input_type):
         # refer to aten/src/ATen/native/quantized/cpu/qadd.cpp
-        s_prime = inputs[2]
-        z_prime = inputs[3]
         assert len(inputs) == 6, "Input quant params not found in op inputs"
         s = inputs[4]
         z = inputs[5]
@@ -450,32 +452,19 @@ def _add_scalar():
         q_min = 0
         q_max = 255
 
+        out_scale = _expr.const(inputs[2])
+        out_zp = _expr.const(inputs[3])
+
         if q_min > z - c_q or q_max < z - c_q:
             dequant = relay.qnn.op.dequantize(inputs[0],
                                               _expr.const(s), _expr.const(z))
             dequantized_add = _op.tensor.add(dequant, _expr.const(c_q * s))
-            return relay.qnn.op.quantize(dequantized_add,
-                                         _expr.const(s_prime),
-                                         _expr.const(z_prime),
+            return relay.qnn.op.quantize(dequantized_add, out_scale, out_zp,
                                          axis=1, out_dtype="uint8")
         else:
-            return relay.qnn.op.requantize(inputs[0], _expr.const(s), _expr.const(z),
-                                           _expr.const(s_prime), _expr.const(z_prime),
-                                           axis=1, out_dtype="uint8")
+            # only scale change
+            return inputs[0]
 
-    return _impl
-
-
-def _mul_scalar():
-    def _impl(inputs, input_type):
-        output_scale = _expr.const(inputs[2])
-        output_zero_point = _expr.const(inputs[3])
-        assert len(inputs) == 6, "Input quant params not found in op inputs"
-        input_scale = _expr.const(inputs[4])
-        input_zero_point = _expr.const(inputs[5])
-        return relay.qnn.op.requantize(inputs[0], input_scale, input_zero_point,
-                                       output_scale, output_zero_point,
-                                       axis=1, out_dtype="uint8")
     return _impl
 
 
@@ -508,6 +497,6 @@ convert_map = {
     'quantized::linear_relu': _linear(True),
     'quantized::cat': _cat(),
     'quantized::add_scalar': _add_scalar(),
-    'quantized::mul_scalar': _mul_scalar(),
+    'quantized::mul_scalar': identity(),  # only scale change
     'quantized::relu6': _relu6()
 }

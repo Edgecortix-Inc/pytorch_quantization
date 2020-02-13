@@ -20,10 +20,10 @@ def get_qconfig(per_channel):
     if per_channel:
         return torch.quantization.get_default_qconfig('fbgemm')
     else:
-        act = MovingAverageMinMaxObserver.with_args(reduce_range=False)
-        return torch.quantization.QConfig(activation=act,
-                                          weight=default_weight_observer)
-        # return torch.quantization.default_qconfig
+        # act = MovingAverageMinMaxObserver.with_args(reduce_range=False)
+        # return torch.quantization.QConfig(activation=act,
+        #                                   weight=default_weight_observer)
+        return torch.quantization.default_qconfig
 
 
 def quantize_model(model, inp, per_channel=False, use_cuda=False, dummy=True):
@@ -56,10 +56,10 @@ def quantize_model(model, inp, per_channel=False, use_cuda=False, dummy=True):
 
 
 qmodels = [
-    ("resnet18", qresnet.resnet18(pretrained=True).eval()),
-    ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
-    # ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
-    ("googlenet", qgooglenet(pretrained=True).eval()),
+    # ("resnet18", qresnet.resnet18(pretrained=True).eval()),
+    # ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
+    # # ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
+    # ("googlenet", qgooglenet(pretrained=True).eval()),
 ]
 
 import sys
