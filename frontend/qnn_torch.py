@@ -28,13 +28,8 @@ class QuantParam:
                                       dtype="int32")  # TODO: uint8?
 
 
-def unpack_quant_params(param_name, packed_params):
-    # TODO figure out a way to decide which unpack to use
-    try:
-        qweight, bias = torch.ops.quantized.conv2d_unpack(packed_params)
-    except:
-        qweight, bias = torch.ops.quantized.linear_unpack(packed_params)
-
+def unpack_quant_params(param_name, packed_params, unpack_func):
+    qweight, bias = unpack_func(packed_params)
     weight_np = qweight.dequantize().numpy()
 
     if qweight.qscheme() == torch.per_tensor_affine:
@@ -49,11 +44,29 @@ def unpack_quant_params(param_name, packed_params):
     return param
 
 
-def get_weight_quant_params(state_dict):
+def get_weight_quant_params(script_module):
+    conv_packed_params = []
+    linear_packed_params = []
+
+    for name, m in script_module.named_modules():
+        if isinstance(m, torch.jit.RecursiveScriptModule):
+            if "Conv" in m.original_name:
+                conv_packed_params.append((name, m.state_dict()))
+            elif m.original_name == "LinearPackedParams":
+                linear_packed_params.append((name, m.state_dict()))
+
+    pairs = [(torch.ops.quantized.conv2d_unpack, conv_packed_params),
+             (torch.ops.quantized.linear_unpack, linear_packed_params)]
+
     quant_params = {}
-    for key, value in state_dict.items():
-        if key.endswith("_packed_params"):
-            quant_params[key] = unpack_quant_params(key, value)
+    param_name = "_packed_params"
+    for unpack_func, params in pairs:
+        for name, state_dict in params:
+            assert len(state_dict) == 1
+            assert param_name in state_dict
+            key = name + "." + param_name
+            packed_param = state_dict[param_name]
+            quant_params[key] = unpack_quant_params(key, packed_param, unpack_func)
     return quant_params
 
 
@@ -192,15 +205,9 @@ def add_input_quant_params_to_op_inputs(graph):
                 scale, zp = get_quant_param_for_input(inp)
                 input_scales.append(scale)
                 input_zero_points.append(zp)
-                # print("\nquant param for the cat node ", node_name)
-                # print(mapping[node_name]["input_scales"])
-                # print(mapping[node_name]["input_zero_points"])
         else:
             for i in range(num_quantized_inputs[operator]):
                 scale, zp = get_quant_param_for_input(node.inputsAt(i))
-                # print("\nquant param for the node ", node_name)
-                # print(scale)
-                # print(zp)
                 input_scales.append(scale)
                 input_zero_points.append(zp)
 
@@ -295,12 +302,8 @@ def _quantized_conv2d(with_relu=False):
         kernel_size = (weight_shape[2], weight_shape[3])
         out_channels = weight_shape[0]
 
-        # print("OC %d, groups %d, groups mod 8 %d" % (out_channels, groups, groups % 8))
-        # print("padding:", padding)
-
         if padding[0] != 0 or padding[1] != 0:
             pad_val = get_scalar(input_zero_point)
-            # print("pad_val:", pad_val)
             inp = _op.nn.pad(inputs[0], pad_width=((0, 0),
                                                    (0, 0),
                                                    (padding[0], padding[0]),
@@ -337,12 +340,10 @@ def _quantized_conv2d(with_relu=False):
                                               axis=1)
         clip_min = 0
         if with_relu:
-            # print("with relu, output zero point = ", output_zero_point)
             clip_min = get_scalar(output_zero_point)
 
         clip = _op.tensor.clip(requantized, clip_min, 255.)
         return _op.cast(clip, dtype="uint8")
-        # return requantized
 
     return _impl
 
@@ -475,7 +476,6 @@ def _add_scalar():
 
 
 def quantize_scalar(data, scale, zero_point):
-    # TODO: make it better
     transformed = zero_point + data / scale
     return max(0, min(round(transformed), 255))
 

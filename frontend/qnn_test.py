@@ -64,7 +64,7 @@ if version.parse(torch.__version__) > version.parse("1.4.0"):
     model_file = "../data/mobilenetv3small-f3be529c.pth"
     qmodels.append(("mobilenet_v3", load_model(model_file).eval()))
 else:
-    print("Mobilenet v3 test requires nightly build, omitting")
+    print("Mobilenet v3 test requires a nightly build via pip, skipping.")
 
 results = []
 
