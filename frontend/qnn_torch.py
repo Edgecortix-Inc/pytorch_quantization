@@ -367,8 +367,8 @@ def _binop(relay_op, with_relu=False):
             rhs = relay.qnn.op.dequantize(rhs,
                                           input_scale_rhs,
                                           input_zero_point_rhs)
-        add = relay_op(lhs, rhs)
-        out = relay.qnn.op.quantize(add,
+        fp32_out = relay_op(lhs, rhs)
+        out = relay.qnn.op.quantize(fp32_out,
                                     output_scale,
                                     output_zero_point)
         if with_relu:
