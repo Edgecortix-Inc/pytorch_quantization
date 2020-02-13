@@ -40,7 +40,7 @@ float_model_file = 'mobilenet_pretrained_float.pth'
 
 # for v3
 saved_model_dir = "data/"
-float_model_file = 'mobilenetv3_small_67.4.pth.tar'
+float_model_file = 'mobilenetv3small-f3be529c.pth'
 
 float_model = load_model(saved_model_dir + float_model_file).to('cpu')
 

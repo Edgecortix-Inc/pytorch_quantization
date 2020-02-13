@@ -7,6 +7,7 @@ from tvm.relay import op as _op
 from tvm.relay.frontend.common import infer_shape
 from util import identity
 
+
 class QuantParam:
     def __init__(self, weight, bias, scale, zero_point, param_key):
         param_prefix = param_key[:-len("._packed_params")]
@@ -24,7 +25,7 @@ class QuantParam:
 
         self.scale = _expr.const(np.asscalar(scale))
         self.zero_point = _expr.const(np.asscalar(zero_point),
-                                      dtype="int32")
+                                      dtype="int32")  # TODO: uint8?
 
 
 def unpack_quant_params(param_name, packed_params):
@@ -112,15 +113,12 @@ def get_add_scalar_output_quant_param(input_scale, input_zero_point,
     c_q = round(c / s)
 
     if q_min > z - c_q:
-        print("hit first case")
         s_prime = (float(q_max) - (z - c_q)) / (float(q_max) - q_min) * s
         z_prime = q_min
     elif q_max < z - c_q:
-        print("hit second case")
         s_prime = (float(z - c_q) - q_min) / (float(q_max) - q_min) * s
         z_prime = q_max
     else:
-        print("hit else case")
         s_prime = s
         z_prime = z - c_q
 
