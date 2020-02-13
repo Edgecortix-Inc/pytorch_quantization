@@ -21,17 +21,6 @@ def conv_1x1_bn(inp, oup, conv_layer=nn.Conv2d,
     )
 
 
-class Hswish(nn.Module):
-    def __init__(self, inplace=True):
-        super(Hswish, self).__init__()
-        self.float_op = nn.quantized.FloatFunctional()
-        self.relu6 = nn.ReLU6(inplace=inplace)
-
-    def forward(self, x):
-        relu6 = self.relu6(self.float_op.add_scalar(x, 3.))
-        return self.float_op.mul(x, self.float_op.mul_scalar(relu6, 1/6.))
-
-
 class Hsigmoid(nn.Module):
     def __init__(self, inplace=True):
         super(Hsigmoid, self).__init__()
@@ -41,6 +30,16 @@ class Hsigmoid(nn.Module):
     def forward(self, x):
         relu6 = self.relu6(self.float_op.add_scalar(x, 3.))
         return self.float_op.mul_scalar(relu6, 1/6.)
+
+
+class Hswish(nn.Module):
+    def __init__(self, inplace=True):
+        super(Hswish, self).__init__()
+        self.float_op = nn.quantized.FloatFunctional()
+        self.hsigmoid = Hsigmoid(inplace)
+
+    def forward(self, x):
+        return self.float_op.mul(x, self.hsigmoid(x))
 
 
 class SEModule(nn.Module):
