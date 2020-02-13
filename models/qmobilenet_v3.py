@@ -1,24 +1,7 @@
+import numpy as np
 import torch
 from torch import nn
 from torch.quantization import QuantStub, DeQuantStub, fuse_modules
-
-
-def conv_bn(inp, oup, stride, conv_layer=nn.Conv2d,
-            norm_layer=nn.BatchNorm2d, nlin_layer=nn.ReLU):
-    return nn.Sequential(
-        conv_layer(inp, oup, 3, stride, 1, bias=False),
-        norm_layer(oup),
-        nlin_layer(inplace=True)
-    )
-
-
-def conv_1x1_bn(inp, oup, conv_layer=nn.Conv2d,
-                norm_layer=nn.BatchNorm2d, nlin_layer=nn.ReLU):
-    return nn.Sequential(
-        conv_layer(inp, oup, 1, 1, 0, bias=False),
-        norm_layer(oup),
-        nlin_layer(inplace=True)
-    )
 
 
 class Hsigmoid(nn.Module):
@@ -70,7 +53,6 @@ class Identity(nn.Module):
 
 
 def make_divisible(x, divisible_by=8):
-    import numpy as np
     return int(np.ceil(x * 1. / divisible_by) * divisible_by)
 
 
@@ -83,7 +65,7 @@ class MobileBottleneck(nn.Module):
         self.use_res_connect = stride == 1 and inp == oup
 
         if nl == 'RE':
-            nlin_layer = nn.ReLU # or ReLU6
+            nlin_layer = nn.ReLU  # or ReLU6
         elif nl == 'HS':
             nlin_layer = Hswish
         else:
@@ -94,16 +76,13 @@ class MobileBottleneck(nn.Module):
             SELayer = Identity
 
         self.conv = nn.Sequential(
-            # pw
             nn.Conv2d(inp, exp, 1, 1, 0, bias=False),
             nn.BatchNorm2d(exp),
             nlin_layer(inplace=True),
-            # dw
             nn.Conv2d(exp, exp, kernel, stride, padding, groups=exp, bias=False),
             nn.BatchNorm2d(exp),
             SELayer(exp),
             nlin_layer(inplace=True),
-            # pw-linear
             nn.Conv2d(exp, oup, 1, 1, 0, bias=False),
             nn.BatchNorm2d(oup),
         )
@@ -163,18 +142,24 @@ class MobileNetV3(nn.Module):
 
         # building first layer
         assert input_size % 32 == 0
+        self.last_channel = last_channel
 
-        self.last_channel = make_divisible(last_channel * width_mult) if width_mult > 1.0 else last_channel
-        self.features = [nn.Sequential(nn.Conv2d(3, input_channel, 3, 2, 1, bias=False),
-                        nn.BatchNorm2d(input_channel),
-                        Hswish(inplace=True))]
+        if width_mult > 1.0:
+            self.last_channel = make_divisible(last_channel * width_mult)
+
+        initial_module = nn.Sequential(nn.Conv2d(3, input_channel, 3, 2, 1, bias=False),
+                                       nn.BatchNorm2d(input_channel),
+                                       Hswish(inplace=True))
+        self.features = [initial_module]
         self.classifier = []
 
         # building mobile blocks
         for k, exp, c, se, nl, s in mobile_setting:
             output_channel = make_divisible(c * width_mult)
             exp_channel = make_divisible(exp * width_mult)
-            self.features.append(MobileBottleneck(input_channel, output_channel, k, s, exp_channel, se, nl))
+            bottle_neck = MobileBottleneck(input_channel, output_channel,
+                                           k, s, exp_channel, se, nl)
+            self.features.append(bottle_neck)
             input_channel = output_channel
 
         # building last several layers
@@ -188,9 +173,11 @@ class MobileNetV3(nn.Module):
             self.features.append(Hswish(inplace=True))
         elif mode == 'small':
             last_conv = make_divisible(576 * width_mult)
-            self.features.append(nn.Sequential(nn.Conv2d(input_channel, last_conv, 1, 1, 0, bias=False),
-                                 nn.BatchNorm2d(last_conv),
-                                 Hswish(inplace=True)))
+            seq = nn.Sequential(nn.Conv2d(input_channel, last_conv,
+                                          1, 1, 0, bias=False),
+                                nn.BatchNorm2d(last_conv),
+                                Hswish(inplace=True))
+            self.features.append(seq)
             self.features.append(nn.AdaptiveAvgPool2d(1))
             self.features.append(nn.Conv2d(last_conv, last_channel, 1, 1, 0))
             self.features.append(Hswish(inplace=True))
@@ -214,7 +201,7 @@ class MobileNetV3(nn.Module):
     def forward(self, x):
         x = self.quant(x)
         x = self.features(x)
-        x = x.mean(3).mean(2)
+        x = x.mean([2, 3])
         x = self.classifier(x)
         x = self.dequant(x)
         return x
@@ -234,14 +221,13 @@ class MobileNetV3(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
-    # seq = list(list(raw_model.children())[0].children())[-4]
     def fuse_model(self):
         for m in self.modules():
             if type(m) == SEModule:
-               for idx in range(len(m.fc)):
-                   if type(m.fc[idx]) == nn.Linear:
-                       fuse_modules(m.fc, [str(idx), str(idx+1)], inplace=True)
-                       break
+                for idx in range(len(m.fc)):
+                    if type(m.fc[idx]) == nn.Linear:
+                        fuse_modules(m.fc, [str(idx), str(idx+1)], inplace=True)
+                        break
             if type(m) == MobileBottleneck:
                 for idx in range(len(m.conv)):
                     if type(m.conv[idx]) == nn.Conv2d:
