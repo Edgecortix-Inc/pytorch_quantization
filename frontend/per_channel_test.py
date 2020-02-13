@@ -1,4 +1,5 @@
 import os
+from packaging import version
 import numpy as np
 import tvm
 from tvm import relay
@@ -16,7 +17,7 @@ from eval_imagenet_1k import get_train_loader, download_imagenet_1k
 
 def quantize_model(model, inp, use_cuda=False, dummy=True):
     model.fuse_model()
-    model.q_config = torch.quantization.get_default_qconfig('fbgemm')
+    model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
     torch.quantization.prepare(model, inplace=True)
 
     if dummy:
@@ -44,11 +45,22 @@ def quantize_model(model, inp, use_cuda=False, dummy=True):
 
 
 qmodels = [
-    ("resnet18", qresnet.resnet18(pretrained=True).eval()),
-    ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
-    ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
-    ("googlenet", qgooglenet(pretrained=True).eval()),
+    # ("resnet18", qresnet.resnet18(pretrained=True).eval()),
+    # ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
+    # ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
+    # ("googlenet", qgooglenet(pretrained=True).eval()),
 ]
+
+if version.parse(torch.__version__) > version.parse("1.4.0"):
+    print("Adding Mobilenet v3 test")
+    import sys
+    sys.path.append("../models")
+    from qmobilenet_v3 import load_model
+
+    model_file = "../data/mobilenetv3small-f3be529c.pth"
+    qmodels.append(("mobilenet_v3", load_model(model_file).eval()))
+else:
+    print("Mobilenet v3 test requires nightly build, omitting")
 
 results = []
 use_cuda = False  # lower accuacy on torch and tvm when using cuda
@@ -63,43 +75,50 @@ for (model_name, raw_model) in qmodels:
         raw_model.to("cuda")
         inp = inp.to("cuda")
 
-    quantize_model(raw_model, inp, use_cuda=use_cuda, dummy=False)
+    quantize_model(raw_model, inp, use_cuda=use_cuda, dummy=True)
 
     script_module = torch.jit.trace(raw_model, inp.to("cpu")).eval()
-    mod, params = parse_script_module(script_module, input_shapes)
+    state_dict = script_module.state_dict()
+    packed_params = state_dict["features.1.conv.0._packed_params"]
+    qweight, bias = torch.ops.quantized.conv2d_unpack(packed_params)
+    graph = script_module.graph
+    torch._C._jit_pass_inline(graph)
 
-    with torch.no_grad():
-        # Quantized models can only run on cpu in torch
-        pt_result = script_module(inp.to("cpu")).numpy()
-        top1_pt, top5_pt = eval_accuracy(script_module)
 
-    if use_cuda:
-        target = "cuda"
-    else:
-        target = "llvm -mcpu=core-avx2"
+#     mod, params = parse_script_module(script_module, input_shapes)
 
-    with relay.build_config(opt_level=3):
-        json, lib, params = relay.build(mod, target=target, params=params)
+#     with torch.no_grad():
+#         # Quantized models can only run on cpu in torch
+#         pt_result = script_module(inp.to("cpu")).numpy()
+#         top1_pt, top5_pt = eval_accuracy(script_module)
 
-    runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context(target, 0))
-    runtime.set_input(**params)
-    runtime.set_input(input_name, tvm_inp)
-    runtime.run()
-    tvm_result = runtime.get_output(0).asnumpy()
+#     if use_cuda:
+#         target = "cuda"
+#     else:
+#         target = "llvm -mcpu=core-avx2"
 
-    max_abs_diff = np.max(np.abs(tvm_result - pt_result))
-    mean_abs_diff = np.mean(np.abs(tvm_result - pt_result))
-    num_correct = np.sum(tvm_result == pt_result)
+#     with relay.build_config(opt_level=3):
+#         json, lib, params = relay.build(mod, target=target, params=params)
 
-    top1_tvm, top5_tvm = eval_accuracy(wrap_tvm_model(runtime, input_name))
+#     runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context(target, 0))
+#     runtime.set_input(**params)
+#     runtime.set_input(input_name, tvm_inp)
+#     runtime.run()
+#     tvm_result = runtime.get_output(0).asnumpy()
 
-    res = (model_name, num_correct, max_abs_diff, mean_abs_diff, top1_pt, top5_pt, top1_tvm, top5_tvm)
-    results.append(res)
+#     max_abs_diff = np.max(np.abs(tvm_result - pt_result))
+#     mean_abs_diff = np.mean(np.abs(tvm_result - pt_result))
+#     num_correct = np.sum(tvm_result == pt_result)
 
-for (model_name, num_correct, max_abs_diff, mean_abs_diff, top1_pt, top5_pt, top1_tvm, top5_tvm) in results:
-    print("\nModel name: %s" % model_name)
-    print("PyTorch accuracy: Top1 = %2.2f, Top5 = %2.2f" % (top1_pt.avg, top5_pt.avg))
-    print("TVM accuracy: Top1 = %2.2f, Top5 = %2.2f" % (top1_tvm.avg, top5_tvm.avg))
-    print("max abs diff:", max_abs_diff)
-    print("mean_abs_diff:", mean_abs_diff)
-    print("%d in 1000 values correct." % num_correct)
+#     top1_tvm, top5_tvm = eval_accuracy(wrap_tvm_model(runtime, input_name))
+
+#     res = (model_name, num_correct, max_abs_diff, mean_abs_diff, top1_pt, top5_pt, top1_tvm, top5_tvm)
+#     results.append(res)
+
+# for (model_name, num_correct, max_abs_diff, mean_abs_diff, top1_pt, top5_pt, top1_tvm, top5_tvm) in results:
+#     print("\nModel name: %s" % model_name)
+#     print("PyTorch accuracy: Top1 = %2.2f, Top5 = %2.2f" % (top1_pt.avg, top5_pt.avg))
+#     print("TVM accuracy: Top1 = %2.2f, Top5 = %2.2f" % (top1_tvm.avg, top5_tvm.avg))
+#     print("max abs diff:", max_abs_diff)
+#     print("mean_abs_diff:", mean_abs_diff)
+#     print("%d in 1000 values correct." % num_correct)
