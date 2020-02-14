@@ -149,9 +149,27 @@ class MulScalarNegative(nn.Module):
         pass
 
 
+class UpsamplingBilinear(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.relu = QuantWrapper(nn.ReLU())
+        self.quant = QuantStub()
+        self.dequant = DeQuantStub()
+
+    def forward(self, x):
+        x = self.quant(x)
+        upsample = nn.functional.interpolate(x, scale_factor=2,
+                                             mode='bilinear', align_corners=True)
+        return self.dequant(upsample)
+
+    def fuse_model(self):
+        pass
+
+
 imagenet_ishape = (1, 3, 224, 224)
 
 qmodules = [
+   # ("upsample bilinear", (1, 3, 64, 64), UpsamplingBilinear(), False),
    ("conv_bn", imagenet_ishape, ConvBn(), False),
    ("conv_bn_relu", imagenet_ishape, ConvBn(with_relu=True), False),
    ("relu", imagenet_ishape, ReLU(), False),
