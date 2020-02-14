@@ -1,4 +1,5 @@
 import os
+from packaging import version
 from PIL import Image
 import numpy as np
 import tvm
@@ -70,3 +71,7 @@ def get_imagenet_input():
     preprocess = get_transform()
     pt_tensor = preprocess(im)
     return np.expand_dims(pt_tensor.numpy(), 0)
+
+
+def torch_version_check():
+    return version.parse(torch.__version__) > version.parse("1.4.0")

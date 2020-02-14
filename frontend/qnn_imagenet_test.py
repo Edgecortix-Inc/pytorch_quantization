@@ -1,4 +1,3 @@
-from packaging import version
 import numpy as np
 import torch
 
@@ -10,6 +9,7 @@ from torchvision.models.quantization import googlenet as qgooglenet
 
 from eval_imagenet_1k import eval_accuracy, wrap_tvm_model
 from test_util import quantize_model, get_tvm_runtime, get_imagenet_input
+from test_util import torch_version_check
 
 
 qmodels = [
@@ -19,7 +19,7 @@ qmodels = [
     ("googlenet", qgooglenet(pretrained=True).eval()),
 ]
 
-if version.parse(torch.__version__) > version.parse("1.4.0"):
+if torch_version_check():
     print("Adding Mobilenet v3 test")
     import sys
     sys.path.append("../models")

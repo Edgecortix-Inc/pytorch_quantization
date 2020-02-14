@@ -4,6 +4,7 @@ from torch import nn
 from torch.quantization import QuantStub, DeQuantStub
 from torch.quantization import fuse_modules, QuantWrapper
 
+from test_util import torch_version_check
 from test_util import quantize_model, get_tvm_runtime
 
 
@@ -139,19 +140,25 @@ qmodules = [
    ("conv_bn_relu", imagenet_ishape, ConvBn(with_relu=True), False),
    ("relu", imagenet_ishape, ReLU(), False),
    ("linear", (16, 16), Linear(), False),
-   ("linear_relu", (16, 16), Linear(with_relu=True), False),
-   ("hsigmoid", imagenet_ishape, Hsigmoid(add_stub=True), False),
-   ("hswish", imagenet_ishape, Hswish(add_stub=True), False),
-   ("semodule", (1, 16, 64, 64), SEModule(16, add_stub=True), False)
+   ("linear_relu", (16, 16), Linear(with_relu=True), False)
 ]
 
 qmodules += [
    ("conv_bn, per_channel", imagenet_ishape, ConvBn(), True),
    ("conv_bn_relu, per_channel", imagenet_ishape, ConvBn(with_relu=True), True),
    ("linear, per_channel", (16, 16), Linear(), False),
-   ("linear_relu, per_channel", (16, 16), Linear(with_relu=True), True),
-   ("semodule, per_channel", (1, 16, 64, 64), SEModule(16, add_stub=True), True)
+   ("linear_relu, per_channel", (16, 16), Linear(with_relu=True), True)
 ]
+
+if torch_version_check():
+    qmodules += [
+       ("hsigmoid", imagenet_ishape, Hsigmoid(add_stub=True), False),
+       ("hswish", imagenet_ishape, Hswish(add_stub=True), False),
+       ("semodule", (1, 16, 64, 64), SEModule(16, add_stub=True), False),
+       ("semodule, per_channel", (1, 16, 64, 64), SEModule(16, add_stub=True), True),
+    ]
+else:
+    print("Skipping tests that requires nightly torch build")
 
 for (module_name, ishape, raw_module, per_channel) in qmodules:
     raw_module.eval()
