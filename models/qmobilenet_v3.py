@@ -226,11 +226,7 @@ class MobileNetV3(nn.Module):
     def fuse_model(self):
         for m in self.modules():
             if isinstance(m, SEModule):
-                for idx in range(len(m.fc)):
-                    if isinstance(m.fc[idx], nn.Linear) and \
-                       isinstance(m.fc[idx + 1], nn.ReLU):
-                        fuse_modules(m.fc, [str(idx), str(idx + 1)],
-                                     inplace=True)
+                fuse_modules(m.fc, ["0", "1"], inplace=True)
             if isinstance(m, MobileBottleneck):
                 for idx in range(len(m.conv)):
                     if isinstance(m.conv[idx],  nn.Conv2d):
