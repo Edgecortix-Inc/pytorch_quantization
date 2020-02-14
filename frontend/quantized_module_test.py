@@ -1,13 +1,10 @@
 import numpy as np
-import tvm
-from tvm import relay
 import torch
 from torch import nn
 from torch.quantization import QuantStub, DeQuantStub
 from torch.quantization import fuse_modules, QuantWrapper
 
-from torch_frontend import parse_script_module
-from test_util import quantize_model
+from test_util import quantize_model, get_tvm_runtime
 
 
 class ConvBn(nn.Module):
@@ -161,24 +158,19 @@ for (module_name, ishape, raw_module, per_channel) in qmodules:
     input_name = 'X'
     input_shapes = {input_name: ishape}
     inp = torch.rand(input_shapes[input_name], dtype=torch.float)
-    tvm_inp = inp.numpy().copy()
 
     quantize_model(raw_module, inp, per_channel=per_channel, dummy=True)
-
     script_module = torch.jit.trace(raw_module, inp).eval()
-    mod, params = parse_script_module(script_module, input_shapes)
 
     with torch.no_grad():
         pt_result = script_module(inp).numpy()
 
-    with relay.build_config(opt_level=3):
-        json, lib, params = relay.build(mod, target="llvm", params=params)
-
-    runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.cpu(0))
-    runtime.set_input(**params)
-    runtime.set_input(input_name, tvm_inp)
+    runtime = get_tvm_runtime(script_module, input_shapes)
+    runtime.set_input(input_name, inp.numpy().copy())
     runtime.run()
     tvm_result = runtime.get_output(0).asnumpy()
+
+    # tvm.testing.assert_allclose(tvm_result, pt_result, rtol=1e-1, atol=1e-1)
 
     max_abs_diff = np.max(np.abs(tvm_result - pt_result))
     mean_abs_diff = np.mean(np.abs(tvm_result - pt_result))

@@ -1,7 +1,5 @@
 from packaging import version
 import numpy as np
-import tvm
-from tvm import relay
 import torch
 
 from torchvision.models.quantization import resnet as qresnet
@@ -9,9 +7,9 @@ from torchvision.models.quantization import mobilenet as qmobilenet
 from torchvision.models.quantization import inception as qinception
 from torchvision.models.quantization import googlenet as qgooglenet
 
-from torch_frontend import parse_script_module
+
 from eval_imagenet_1k import eval_accuracy, wrap_tvm_model
-from test_util import quantize_model
+from test_util import quantize_model, get_tvm_runtime
 
 
 qmodels = [
@@ -39,26 +37,18 @@ for (model_name, raw_model) in qmodels:
     input_name = 'X'
     input_shapes = {input_name: (1, 3, 224, 224)}
     inp = torch.rand(input_shapes[input_name], dtype=torch.float)
-    tvm_inp = inp.numpy().copy()
 
     quantize_model(raw_model, inp, per_channel=per_channel, dummy=False)
-
     script_module = torch.jit.trace(raw_model, inp).eval()
-    mod, params = parse_script_module(script_module, input_shapes)
 
     with torch.no_grad():
         pt_result = script_module(inp).numpy()
         top1_pt, top5_pt = eval_accuracy(script_module)
 
-    target = "llvm -mcpu=core-avx2"
-
-    with relay.build_config(opt_level=3):
-        json, lib, params = relay.build(mod, target=target, params=params)
-
-    runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context(target, 0))
-    runtime.set_input(**params)
-    runtime.set_input(input_name, tvm_inp)
+    runtime = get_tvm_runtime(script_module, input_shapes)
+    runtime.set_input(input_name, inp.numpy().copy())
     runtime.run()
+
     tvm_result = runtime.get_output(0).asnumpy()
 
     max_abs_diff = np.max(np.abs(tvm_result - pt_result))
@@ -71,6 +61,7 @@ for (model_name, raw_model) in qmodels:
         model_name += ", per channel quantization"
     else:
         model_name += ", per tensor quantization"
+
     res = (model_name, num_correct, max_abs_diff, mean_abs_diff, top1_pt, top5_pt, top1_tvm, top5_tvm)
     results.append(res)
 

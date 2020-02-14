@@ -1,9 +1,12 @@
 import os
+import tvm
+from tvm import relay
 import torch
 from torch.quantization.observer import MovingAverageMinMaxObserver
 from torch.quantization.observer import default_weight_observer
 
 from eval_imagenet_1k import get_train_loader, download_imagenet_1k
+from torch_frontend import parse_script_module
 
 
 def get_qconfig(per_channel):
@@ -36,3 +39,15 @@ def quantize_model(model, inp, per_channel=False, dummy=True):
         print("Done.")
 
     torch.quantization.convert(model, inplace=True)
+
+
+def get_tvm_runtime(script_module, input_shapes):
+    mod, params = parse_script_module(script_module, input_shapes)
+
+    with relay.build_config(opt_level=3):
+        json, lib, params = relay.build(mod, target="llvm -mcpu=core-avx2",
+                                        params=params)
+
+    runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.cpu(0))
+    runtime.set_input(**params)
+    return runtime
