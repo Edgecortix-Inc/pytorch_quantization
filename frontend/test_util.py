@@ -1,11 +1,15 @@
 import os
+from PIL import Image
+import numpy as np
 import tvm
 from tvm import relay
+from tvm.contrib.download import download_testdata
 import torch
 from torch.quantization.observer import MovingAverageMinMaxObserver
 from torch.quantization.observer import default_weight_observer
 
 from eval_imagenet_1k import get_train_loader, download_imagenet_1k
+from eval_imagenet_1k import get_transform
 from torch_frontend import parse_script_module
 
 
@@ -51,3 +55,18 @@ def get_tvm_runtime(script_module, input_shapes):
     runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.cpu(0))
     runtime.set_input(**params)
     return runtime
+
+
+def get_real_image(im_height, im_width):
+    repo_base = 'https://github.com/dmlc/web-data/raw/master/tensorflow/models/InceptionV1/'
+    img_name = 'elephant-299.jpg'
+    image_url = os.path.join(repo_base, img_name)
+    img_path = download_testdata(image_url, img_name, module='data')
+    return Image.open(img_path).resize((im_height, im_width))
+
+
+def get_imagenet_input():
+    im = get_real_image(224, 224)
+    preprocess = get_transform()
+    pt_tensor = preprocess(im)
+    return np.expand_dims(pt_tensor.numpy(), 0)

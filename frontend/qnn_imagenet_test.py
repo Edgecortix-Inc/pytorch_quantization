@@ -9,14 +9,14 @@ from torchvision.models.quantization import googlenet as qgooglenet
 
 
 from eval_imagenet_1k import eval_accuracy, wrap_tvm_model
-from test_util import quantize_model, get_tvm_runtime
+from test_util import quantize_model, get_tvm_runtime, get_imagenet_input
 
 
 qmodels = [
-    ("resnet18", qresnet.resnet18(pretrained=True).eval()),
-    ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
-    ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
-    ("googlenet", qgooglenet(pretrained=True).eval()),
+    # ("resnet18", qresnet.resnet18(pretrained=True).eval()),
+    # ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
+    # ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
+    # ("googlenet", qgooglenet(pretrained=True).eval()),
 ]
 
 if version.parse(torch.__version__) > version.parse("1.4.0"):
@@ -36,20 +36,24 @@ results = []
 for (model_name, raw_model) in qmodels:
     input_name = 'X'
     input_shapes = {input_name: (1, 3, 224, 224)}
-    inp = torch.rand(input_shapes[input_name], dtype=torch.float)
+    inp = get_imagenet_input()
+    pt_inp = torch.from_numpy(inp)
 
-    quantize_model(raw_model, inp, per_channel=per_channel, dummy=False)
-    script_module = torch.jit.trace(raw_model, inp).eval()
+    quantize_model(raw_model, pt_inp, per_channel=per_channel, dummy=False)
+    script_module = torch.jit.trace(raw_model, pt_inp).eval()
 
     with torch.no_grad():
-        pt_result = script_module(inp).numpy()
+        pt_result = script_module(pt_inp).numpy()
         top1_pt, top5_pt = eval_accuracy(script_module)
 
     runtime = get_tvm_runtime(script_module, input_shapes)
-    runtime.set_input(input_name, inp.numpy().copy())
+    runtime.set_input(input_name, inp)
     runtime.run()
 
     tvm_result = runtime.get_output(0).asnumpy()
+
+    tvm_pred = np.argsort(tvm_result[0])[::-1][:5]
+    pt_pred = np.argsort(pt_result[0])[::-1][:5]
 
     max_abs_diff = np.max(np.abs(tvm_result - pt_result))
     mean_abs_diff = np.mean(np.abs(tvm_result - pt_result))
