@@ -66,6 +66,7 @@ if version.parse(torch.__version__) > version.parse("1.4.0"):
 else:
     print("Mobilenet v3 test requires a nightly build via pip, skipping.")
 
+per_channel = True
 results = []
 
 for (model_name, raw_model) in qmodels:
@@ -74,13 +75,12 @@ for (model_name, raw_model) in qmodels:
     inp = torch.rand(input_shapes[input_name], dtype=torch.float)
     tvm_inp = inp.numpy().copy()
 
-    quantize_model(raw_model, inp, per_channel=False, dummy=False)
+    quantize_model(raw_model, inp, per_channel=per_channel, dummy=False)
 
     script_module = torch.jit.trace(raw_model, inp).eval()
     mod, params = parse_script_module(script_module, input_shapes)
 
     with torch.no_grad():
-        # Quantized models can only run on cpu in torch
         pt_result = script_module(inp).numpy()
         top1_pt, top5_pt = eval_accuracy(script_module)
 
@@ -101,6 +101,10 @@ for (model_name, raw_model) in qmodels:
 
     top1_tvm, top5_tvm = eval_accuracy(wrap_tvm_model(runtime, input_name))
 
+    if per_channel:
+        model_name += ", per channel quantization"
+    else:
+        model_name += ", per tensor quantization"
     res = (model_name, num_correct, max_abs_diff, mean_abs_diff, top1_pt, top5_pt, top1_tvm, top5_tvm)
     results.append(res)
 

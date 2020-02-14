@@ -4,7 +4,7 @@ import torch
 import tvm
 from tvm.relay import expr as _expr
 from tvm.relay import analysis as _analysis
-from tvm.relay import module as _module
+from tvm.ir import module as _module
 from tvm.relay.loops import while_loop
 from tvm.relay import op as _op
 
@@ -390,4 +390,4 @@ def parse_script_module(script_module, input_shapes):
                            output_index_map, ret_name)
     func = tvm.relay.Function(_analysis.free_vars(body), body)
 
-    return _module.Module.from_expr(func), tvm_params
+    return _module.IRModule.from_expr(func), tvm_params

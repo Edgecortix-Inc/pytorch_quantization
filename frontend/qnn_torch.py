@@ -23,9 +23,8 @@ class QuantParam:
             self.bias_var = None
             self.bias = None
 
-        self.scale = _expr.const(np.asscalar(scale))
-        self.zero_point = _expr.const(np.asscalar(zero_point),
-                                      dtype="int32")  # TODO: uint8?
+        self.scale = _expr.const(scale)
+        self.zero_point = _expr.const(zero_point, dtype="int32")  # TODO: uint8?
 
 
 def unpack_quant_params(param_name, packed_params, unpack_func):
@@ -33,13 +32,13 @@ def unpack_quant_params(param_name, packed_params, unpack_func):
     weight_np = qweight.dequantize().numpy()
 
     if qweight.qscheme() == torch.per_tensor_affine:
-        scale = np.array([qweight.q_scale()])
-        zero_point = np.array([qweight.q_zero_point()], dtype="int32")
-        param = QuantParam(weight_np, bias, scale, zero_point, param_name)
+        param = QuantParam(weight_np, bias, qweight.q_scale(),
+                           int(qweight.q_zero_point()), param_name)
     else:
         scales = qweight.q_per_channel_scales().numpy()
         zero_points = qweight.q_per_channel_zero_points().numpy()
-        param = QuantParam(weight_np, bias, scales, zero_points, param_name)
+        assert np.all(zero_points == 0)
+        param = QuantParam(weight_np, bias, scales, 0, param_name)
 
     return param
 
@@ -66,7 +65,9 @@ def get_weight_quant_params(script_module):
             assert param_name in state_dict
             key = name + "." + param_name
             packed_param = state_dict[param_name]
-            quant_params[key] = unpack_quant_params(key, packed_param, unpack_func)
+            quant_params[key] = unpack_quant_params(key, packed_param,
+                                                    unpack_func)
+
     return quant_params
 
 
@@ -76,7 +77,8 @@ def add_quant_params_to_outputs(outputs, output_index_map,
         qparam = quant_params[packed_param_name]
         output_index_map[node_name] = len(outputs)
         qweight = relay.qnn.op.quantize(qparam.weight_var, qparam.scale,
-                                        qparam.zero_point, out_dtype="int8")
+                                        qparam.zero_point, out_dtype="int8",
+                                        axis=0)
         param_tup = (qweight, qparam.scale, qparam.zero_point, qparam.bias_var)
         outputs.append(param_tup)
 
@@ -267,8 +269,12 @@ def _dequantize():
     return _impl
 
 
+def get_numpy(relay_const_scalar):
+    return relay_const_scalar.data.asnumpy()
+
+
 def get_scalar(relay_const_scalar):
-    return np.asscalar(relay_const_scalar.data.asnumpy())
+    return np.asscalar(get_numpy(relay_const_scalar))
 
 
 def _quantized_conv2d(with_relu=False):
@@ -321,13 +327,13 @@ def _quantized_conv2d(with_relu=False):
                                        channels=out_channels)
 
         # input scale * weight scale
-        requant_input_scale = _expr.const(inputs[8] * get_scalar(weight_scale))
+        requant_input_scale = _expr.const(inputs[8] * get_numpy(weight_scale))
         bias_var = inputs[1][3]
 
         if bias_var is not None:
             qbias = relay.qnn.op.quantize(bias_var, requant_input_scale,
                                           _expr.const(0, "int32"),
-                                          out_dtype="int32")
+                                          out_dtype="int32", axis=0)
             conv_res = _op.nn.bias_add(conv_out, qbias)
         else:
             conv_res = conv_out
@@ -336,8 +342,7 @@ def _quantized_conv2d(with_relu=False):
                                               requant_input_scale,
                                               _expr.const(0, "int32"),
                                               output_scale, output_zero_point,
-                                              out_dtype="int32",
-                                              axis=1)
+                                              out_dtype="int32", axis=1)
         clip_min = 0
         if with_relu:
             clip_min = get_scalar(output_zero_point)
@@ -397,17 +402,19 @@ def _linear(with_relu=False):
         input_scale = _expr.const(inputs[4])
         input_zero_point = _expr.const(inputs[5])
 
+        weight_shape = infer_shape(weight)
         dense = relay.qnn.op.dense(inputs[0], weight,
                                    input_zero_point, weight_zero_point,
-                                   input_scale, weight_scale)
+                                   input_scale, weight_scale,
+                                   units=weight_shape[0])
 
-        requant_input_scale = _expr.const(inputs[4] * get_scalar(weight_scale))
+        requant_input_scale = _expr.const(inputs[4] * get_numpy(weight_scale))
         bias_var = inputs[1][3]
 
         if bias_var is not None:
             qbias = relay.qnn.op.quantize(bias_var, requant_input_scale,
-                                          _expr.const(0, "int32")
-                                          , out_dtype="int32")
+                                          _expr.const(0, "int32"),
+                                          out_dtype="int32", axis=0)
             dense_res = _op.nn.bias_add(dense, qbias)
         else:
             dense_res = dense
@@ -416,8 +423,7 @@ def _linear(with_relu=False):
                                               requant_input_scale,
                                               relay.const(0, 'int32'),
                                               output_scale, output_zero_point,
-                                              out_dtype="int32",
-                                              axis=1)
+                                              out_dtype="int32", axis=1)
         clip_min = 0
         if with_relu:
             clip_min = get_scalar(output_zero_point)
@@ -438,13 +444,14 @@ def _cat():
 
         for i in range(0, num_inputs):
             inp_scale = _expr.const(inputs[4+i*2])
-            inp_zero_point = _expr.const(inputs[4+i*2+1])
+            inp_zp = _expr.const(inputs[4+i*2+1])
             dequantized.append(relay.qnn.op.dequantize(inputs[0][i],
-                                                       inp_scale, inp_zero_point))
+                                                       inp_scale, inp_zp))
 
-        return relay.qnn.op.quantize(_op.tensor.concatenate(dequantized, axis=axis),
-                                     output_scale,
-                                     output_zero_point)
+        concat = _op.tensor.concatenate(dequantized, axis=axis)
+        return relay.qnn.op.quantize(concat, output_scale, output_zero_point,
+                                     axis=1, out_dtype="uint8")
+
     return _impl
 
 
