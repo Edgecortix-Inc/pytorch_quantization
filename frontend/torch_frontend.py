@@ -9,7 +9,7 @@ from tvm.relay.loops import while_loop
 from tvm.relay import op as _op
 
 from relay_op_conversion import convert_map, wrap_const
-from util import get_output_name
+from frontend_util import get_output_name
 
 import qnn_torch
 

@@ -1,51 +1,17 @@
-import os
 from packaging import version
 import numpy as np
 import tvm
 from tvm import relay
 import torch
-from torch.quantization.observer import MovingAverageMinMaxObserver, default_weight_observer
+
 from torchvision.models.quantization import resnet as qresnet
 from torchvision.models.quantization import mobilenet as qmobilenet
 from torchvision.models.quantization import inception as qinception
 from torchvision.models.quantization import googlenet as qgooglenet
 
-
 from torch_frontend import parse_script_module
 from eval_imagenet_1k import eval_accuracy, wrap_tvm_model
-from eval_imagenet_1k import get_train_loader, download_imagenet_1k
-
-
-def get_qconfig(per_channel):
-    if per_channel:
-        return torch.quantization.get_default_qconfig('fbgemm')
-    else:
-        act = MovingAverageMinMaxObserver.with_args(reduce_range=False)
-        return torch.quantization.QConfig(activation=act,
-                                          weight=default_weight_observer)
-
-
-def quantize_model(model, inp, per_channel=False,  dummy=True):
-    model.fuse_model()
-    model.qconfig = get_qconfig(per_channel)
-    torch.quantization.prepare(model, inplace=True)
-
-    if dummy:
-        model(inp)
-    else:
-        data_root = "."
-        data_dir = "imagenet_1k"
-        if not os.path.exists(os.path.join(data_root, data_dir)):
-            download_imagenet_1k(data_root)
-
-        print("\nCalibrating on real data...")
-        for image, _ in get_train_loader(data_dir):
-            with torch.no_grad():
-                model(image)
-
-        print("Done.")
-
-    torch.quantization.convert(model, inplace=True)
+from test_util import quantize_model
 
 
 qmodels = [
@@ -113,5 +79,5 @@ for (model_name, num_correct, max_abs_diff, mean_abs_diff, top1_pt, top5_pt, top
     print("PyTorch accuracy: Top1 = %2.2f, Top5 = %2.2f" % (top1_pt.avg, top5_pt.avg))
     print("TVM accuracy: Top1 = %2.2f, Top5 = %2.2f" % (top1_tvm.avg, top5_tvm.avg))
     print("max abs diff:", max_abs_diff)
-    print("mean_abs_diff:", mean_abs_diff)
+    print("mean abs_diff:", mean_abs_diff)
     print("%d in 1000 values correct." % num_correct)
