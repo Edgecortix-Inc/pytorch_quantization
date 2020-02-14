@@ -13,10 +13,10 @@ from test_util import quantize_model, get_tvm_runtime, get_imagenet_input
 
 
 qmodels = [
-    # ("resnet18", qresnet.resnet18(pretrained=True).eval()),
-    # ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
-    # ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
-    # ("googlenet", qgooglenet(pretrained=True).eval()),
+    ("resnet18", qresnet.resnet18(pretrained=True).eval()),
+    ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
+    ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
+    ("googlenet", qgooglenet(pretrained=True).eval()),
 ]
 
 if version.parse(torch.__version__) > version.parse("1.4.0"):
@@ -52,8 +52,10 @@ for (model_name, raw_model) in qmodels:
 
     tvm_result = runtime.get_output(0).asnumpy()
 
-    tvm_pred = np.argsort(tvm_result[0])[::-1][:5]
-    pt_pred = np.argsort(pt_result[0])[::-1][:5]
+    print("PyTorch top5 label:", np.argsort(pt_result[0])[::-1][:5])
+    print("TVM top5 label:", np.argsort(tvm_result[0])[::-1][:5])
+    print("PyTorch top5 raw output:", np.sort(pt_result[0])[::-1][:5])
+    print("TVM top5 raw output:", np.sort(tvm_result[0])[::-1][:5])
 
     max_abs_diff = np.max(np.abs(tvm_result - pt_result))
     mean_abs_diff = np.mean(np.abs(tvm_result - pt_result))
