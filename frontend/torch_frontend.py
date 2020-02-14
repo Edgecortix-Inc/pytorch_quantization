@@ -347,14 +347,14 @@ def get_all_op_names(graph):
     return set([node.kind() for node in nodes])
 
 
-def report_missing_conversion(graph):
+def report_missing_conversion(op_names):
     known_ops = ["prim::Constant", "prim::GetAttr",
                  "prim::ListConstruct", "prim::ListUnpack",
                  "prim::TupleConstruct", "prim::TupleUnpack",
                  "prim::If", "prim::Loop"]
     known_ops += list(convert_map.keys())
     known_ops += list(qnn_torch.convert_map.keys())
-    missing = [op_name for op_name in get_all_op_names(graph)
+    missing = [op_name for op_name in op_names
                if op_name not in known_ops]
 
     if missing:
@@ -365,7 +365,8 @@ def report_missing_conversion(graph):
 def parse_script_module(script_module, input_shapes):
     graph = script_module.graph.copy()
     run_jit_passes(graph)
-    report_missing_conversion(graph)
+    op_names = get_all_op_names(graph)
+    report_missing_conversion(op_names)
 
     params = script_module.state_dict()
     input_vars = parse_inputs(graph.inputs(), input_shapes)
@@ -378,13 +379,14 @@ def parse_script_module(script_module, input_shapes):
     ret_name = get_input_names(graph.return_node())[0]
 
     # For quantized models
-    weight_quant_params = qnn_torch.get_weight_quant_params(script_module)
-    qnn_torch.add_input_quant_params_to_op_inputs(graph)
-    qnn_torch.add_quant_params_to_outputs(outputs, output_index_map,
-                                          packed_param_map,
-                                          weight_quant_params)
-    qnn_torch.add_quant_params(tvm_params, weight_quant_params)
-    convert_map.update(qnn_torch.convert_map)
+    if "aten::quantize_per_tensor" in op_names:
+        weight_quant_params = qnn_torch.get_weight_quant_params(script_module)
+        qnn_torch.add_input_quant_params_to_op_inputs(graph)
+        qnn_torch.add_quant_params_to_outputs(outputs, output_index_map,
+                                              packed_param_map,
+                                              weight_quant_params)
+        qnn_torch.add_quant_params(tvm_params, weight_quant_params)
+        convert_map.update(qnn_torch.convert_map)
 
     body = parse_operators(parse_ops(graph.nodes()), outputs,
                            output_index_map, ret_name)

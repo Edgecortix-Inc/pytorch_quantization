@@ -409,7 +409,7 @@ def _transpose():
         else:
             ndims = data.shape
 
-        if isinstance(data, tvm.ndarray.NDArray):
+        if isinstance(data, tvm.runtime.ndarray.NDArray):
             ndims = len(data.shape)
         axes = list(range(ndims))
 
