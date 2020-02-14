@@ -1,35 +1,187 @@
+import numpy as np
+import tvm
+from tvm import relay
 import torch
+from torch import nn
 from torch.quantization import QuantStub, DeQuantStub
 from torch.quantization import fuse_modules, QuantWrapper
 
+from torch_frontend import parse_script_module
+from test_util import quantize_model
 
-class AnnotatedConvBnModel(torch.nn.Module):
+
+class ConvBn(nn.Module):
+    def __init__(self, with_relu=False):
+        super().__init__()
+        layers = [nn.Conv2d(3, 32, 3, bias=True),
+                  nn.BatchNorm2d(32)]
+        if with_relu:
+            layers.append(nn.ReLU())
+        self.conv = nn.Sequential(*layers)
+        self.quant_wrap = QuantWrapper(self.conv)
+        self.with_relu = with_relu
+
+    def forward(self, x):
+        return self.quant_wrap(x)
+
+    def fuse_model(self):
+        indices = ["0", "1"]
+        if self.with_relu:
+            indices.append("2")
+        fuse_modules(self.conv, indices, inplace=True)
+
+
+class Linear(nn.Module):
+    def __init__(self, with_relu=False):
+        super().__init__()
+        layers = [nn.Linear(50, 100)]
+        if with_relu:
+            layers.append(nn.ReLU())
+        self.fc = nn.Sequential(*layers)
+        self.quant_wrap = QuantWrapper(self.fc)
+        self.with_relu = with_relu
+
+    def forward(self, x):
+        return self.quant_wrap(x)
+
+    def fuse_model(self):
+        if self.with_relu:
+            fuse_modules(self.fc, ["0", "1"], inplace=True)
+
+
+class ReLU(nn.Module):
     def __init__(self):
-        super(AnnotatedConvBnModel, self).__init__()
-        self.conv = torch.nn.Conv2d(3, 32, 3, bias=False).to(dtype=torch.float)
-        self.bn = torch.nn.BatchNorm2d(5).to(dtype=torch.float)
+        super().__init__()
+        self.relu = QuantWrapper(nn.ReLU())
+
+    def forward(self, x):
+        return self.relu(x)
+
+    def fuse_model(self):
+        pass
+
+
+class Hsigmoid(nn.Module):
+    def __init__(self, inplace=True, add_stub=False):
+        super().__init__()
+        self.float_op = nn.quantized.FloatFunctional()
+        self.relu6 = nn.ReLU6(inplace=inplace)
         self.quant = QuantStub()
         self.dequant = DeQuantStub()
+        self.add_stub = add_stub
 
     def forward(self, x):
-        x = self.quant(x)
-        x = self.conv(x)
-        x = self.bn(x)
-        x = self.dequant(x)
-        return x
+        if self.add_stub:
+            x = self.quant(x)
+        relu6 = self.relu6(self.float_op.add_scalar(x, 3.))
+        mul = self.float_op.mul_scalar(relu6, 1/6.)
+        if self.add_stub:
+            mul = self.dequant(mul)
+        return mul
 
     def fuse_model(self):
         pass
 
 
-class AnnotatedSingleLayerLinearModel(torch.nn.Module):
-    def __init__(self):
-        super(AnnotatedSingleLayerLinearModel, self).__init__()
-        self.fc1 = QuantWrapper(torch.nn.Linear(5, 10).to(dtype=torch.float))
+class Hswish(nn.Module):
+    def __init__(self, inplace=True, add_stub=False):
+        super(Hswish, self).__init__()
+        self.float_op = nn.quantized.FloatFunctional()
+        self.hsigmoid = Hsigmoid(inplace, add_stub=False)
+        self.quant = QuantStub()
+        self.dequant = DeQuantStub()
+        self.add_stub = add_stub
 
     def forward(self, x):
-        x = self.fc1(x)
-        return x
+        if self.add_stub:
+            x = self.quant(x)
+        mul = self.float_op.mul(x, self.hsigmoid(x))
+        if self.add_stub:
+            mul = self.dequant(mul)
+        return mul
 
     def fuse_model(self):
         pass
+
+
+class SEModule(nn.Module):
+    def __init__(self, channel, reduction=4, add_stub=False):
+        super(SEModule, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel, bias=False),
+            Hsigmoid(add_stub=False)
+        )
+        self.fmul = nn.quantized.FloatFunctional()
+        self.quant = QuantStub()
+        self.dequant = DeQuantStub()
+        self.add_stub = add_stub
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        if self.add_stub:
+            x = self.quant(x)
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        out = self.fmul.mul(x, y.expand_as(x))
+        if self.add_stub:
+            return self.dequant(out)
+        else:
+            return out
+
+    def fuse_model(self):
+        fuse_modules(self.fc, ["0", "1"], inplace=True)
+
+imagenet_ishape = (1, 3, 224, 224)
+
+qmodules = [
+   ("conv_bn", imagenet_ishape, ConvBn(), False),
+   ("conv_bn_relu", imagenet_ishape, ConvBn(with_relu=True), False),
+   ("relu", imagenet_ishape, ReLU(), False),
+   # ("linear", (50, 50), Linear(), False),
+   # ("linear_relu", (50, 50), Linear(with_relu=True), False),
+   ("hsigmoid", imagenet_ishape, Hsigmoid(add_stub=True), False),
+   ("hswish", imagenet_ishape, Hswish(add_stub=True), False),
+   ("semodule", (1, 16, 64, 64), SEModule(16, add_stub=True), False)
+]
+
+per_channel_tests = [
+   ("conv_bn, per_channel", imagenet_ishape, ConvBn(), True),
+   ("conv_bn_relu, per_channel", imagenet_ishape, ConvBn(with_relu=True), True),
+   # ("linear, per_channel", (50, 50), Linear(), False),
+   # ("linear_relu, per_channel", (50, 50), Linear(with_relu=True), True),
+   ("semodule, per_channel", (1, 16, 64, 64), SEModule(16, add_stub=True), True)
+]
+
+for (module_name, ishape, raw_module, per_channel) in qmodules + per_channel_tests:
+    raw_module.eval()
+    input_name = 'X'
+    input_shapes = {input_name: ishape}
+    inp = torch.rand(input_shapes[input_name], dtype=torch.float)
+    tvm_inp = inp.numpy().copy()
+
+    quantize_model(raw_module, inp, per_channel=per_channel, dummy=True)
+
+    script_module = torch.jit.trace(raw_module, inp).eval()
+    mod, params = parse_script_module(script_module, input_shapes)
+
+    with torch.no_grad():
+        pt_result = script_module(inp).numpy()
+
+    with relay.build_config(opt_level=3):
+        json, lib, params = relay.build(mod, target="llvm", params=params)
+
+    runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.cpu(0))
+    runtime.set_input(**params)
+    runtime.set_input(input_name, tvm_inp)
+    runtime.run()
+    tvm_result = runtime.get_output(0).asnumpy()
+
+    max_abs_diff = np.max(np.abs(tvm_result - pt_result))
+    mean_abs_diff = np.mean(np.abs(tvm_result - pt_result))
+    num_correct = np.sum(tvm_result == pt_result)
+
+    correct_ratio = num_correct / float(np.prod(tvm_result.shape))
+    print(module_name, max_abs_diff, mean_abs_diff, correct_ratio)

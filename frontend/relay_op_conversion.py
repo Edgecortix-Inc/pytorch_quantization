@@ -12,7 +12,7 @@ from tvm.relay.frontend.common import infer_value as _infer_value
 from tvm.relay.frontend.common import infer_type as _infer_type
 
 import qnn_torch
-from util import identity
+from frontend_util import identity
 
 
 def wrap_const(c):
