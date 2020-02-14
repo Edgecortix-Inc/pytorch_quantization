@@ -34,7 +34,7 @@ class ConvBn(nn.Module):
 class Linear(nn.Module):
     def __init__(self, with_relu=False):
         super().__init__()
-        layers = [nn.Linear(50, 100)]
+        layers = [nn.Linear(16, 32)]
         if with_relu:
             layers.append(nn.ReLU())
         self.fc = nn.Sequential(*layers)
@@ -134,28 +134,29 @@ class SEModule(nn.Module):
     def fuse_model(self):
         fuse_modules(self.fc, ["0", "1"], inplace=True)
 
+
 imagenet_ishape = (1, 3, 224, 224)
 
 qmodules = [
    ("conv_bn", imagenet_ishape, ConvBn(), False),
    ("conv_bn_relu", imagenet_ishape, ConvBn(with_relu=True), False),
    ("relu", imagenet_ishape, ReLU(), False),
-   # ("linear", (50, 50), Linear(), False),
-   # ("linear_relu", (50, 50), Linear(with_relu=True), False),
+   ("linear", (16, 16), Linear(), False),
+   ("linear_relu", (16, 16), Linear(with_relu=True), False),
    ("hsigmoid", imagenet_ishape, Hsigmoid(add_stub=True), False),
    ("hswish", imagenet_ishape, Hswish(add_stub=True), False),
    ("semodule", (1, 16, 64, 64), SEModule(16, add_stub=True), False)
 ]
 
-per_channel_tests = [
+qmodules += [
    ("conv_bn, per_channel", imagenet_ishape, ConvBn(), True),
    ("conv_bn_relu, per_channel", imagenet_ishape, ConvBn(with_relu=True), True),
-   # ("linear, per_channel", (50, 50), Linear(), False),
-   # ("linear_relu, per_channel", (50, 50), Linear(with_relu=True), True),
+   ("linear, per_channel", (16, 16), Linear(), False),
+   ("linear_relu, per_channel", (16, 16), Linear(with_relu=True), True),
    ("semodule, per_channel", (1, 16, 64, 64), SEModule(16, add_stub=True), True)
 ]
 
-for (module_name, ishape, raw_module, per_channel) in qmodules + per_channel_tests:
+for (module_name, ishape, raw_module, per_channel) in qmodules:
     raw_module.eval()
     input_name = 'X'
     input_shapes = {input_name: ishape}
