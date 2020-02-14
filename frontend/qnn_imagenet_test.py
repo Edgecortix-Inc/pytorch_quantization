@@ -34,6 +34,11 @@ per_channel = True
 results = []
 
 for (model_name, raw_model) in qmodels:
+    if per_channel:
+        model_name += ", per channel quantization"
+    else:
+        model_name += ", per tensor quantization"
+
     input_name = 'X'
     input_shapes = {input_name: (1, 3, 224, 224)}
     inp = get_imagenet_input()
@@ -52,29 +57,24 @@ for (model_name, raw_model) in qmodels:
 
     tvm_result = runtime.get_output(0).asnumpy()
 
-    print("PyTorch top5 label:", np.argsort(pt_result[0])[::-1][:5])
-    print("TVM top5 label:", np.argsort(tvm_result[0])[::-1][:5])
-    print("PyTorch top5 raw output:", np.sort(pt_result[0])[::-1][:5])
-    print("TVM top5 raw output:", np.sort(tvm_result[0])[::-1][:5])
+    top1_tvm, top5_tvm = eval_accuracy(wrap_tvm_model(runtime, input_name))
 
+    results.append((model_name, pt_result[0], tvm_result[0],
+                    top1_pt, top5_pt, top1_tvm, top5_tvm))
+
+for (model_name, pt_result, tvm_result,
+     top1_pt, top5_pt, top1_tvm, top5_tvm) in results:
     max_abs_diff = np.max(np.abs(tvm_result - pt_result))
     mean_abs_diff = np.mean(np.abs(tvm_result - pt_result))
     num_correct = np.sum(tvm_result == pt_result)
 
-    top1_tvm, top5_tvm = eval_accuracy(wrap_tvm_model(runtime, input_name))
-
-    if per_channel:
-        model_name += ", per channel quantization"
-    else:
-        model_name += ", per tensor quantization"
-
-    res = (model_name, num_correct, max_abs_diff, mean_abs_diff, top1_pt, top5_pt, top1_tvm, top5_tvm)
-    results.append(res)
-
-for (model_name, num_correct, max_abs_diff, mean_abs_diff, top1_pt, top5_pt, top1_tvm, top5_tvm) in results:
     print("\nModel name: %s" % model_name)
     print("PyTorch accuracy: Top1 = %2.2f, Top5 = %2.2f" % (top1_pt.avg, top5_pt.avg))
     print("TVM accuracy: Top1 = %2.2f, Top5 = %2.2f" % (top1_tvm.avg, top5_tvm.avg))
+    print("PyTorch top5 label:", np.argsort(pt_result)[::-1][:5])
+    print("TVM top5 label:", np.argsort(tvm_result)[::-1][:5])
+    print("PyTorch top5 raw output:", np.sort(pt_result)[::-1][:5])
+    print("TVM top5 raw output:", np.sort(tvm_result)[::-1][:5])
     print("max abs diff:", max_abs_diff)
     print("mean abs_diff:", mean_abs_diff)
-    print("%d in 1000 values correct." % num_correct)
+    print("%d in 1000 raw outputs correct." % num_correct)
