@@ -5,7 +5,6 @@ from tvm import relay
 from tvm.relay import expr as _expr
 from tvm.relay import op as _op
 from tvm.relay.frontend.common import infer_shape
-from frontend_util import identity
 
 
 class QuantParam:
