@@ -24,7 +24,7 @@ class QuantParam:
             self.bias = None
 
         self.scale = _expr.const(scale)
-        self.zero_point = _expr.const(zero_point, dtype="int32")  # TODO: uint8?
+        self.zero_point = _expr.const(zero_point, dtype="int32")
 
 
 def unpack_quant_params(param_name, packed_params, unpack_func):
@@ -140,14 +140,37 @@ def get_add_scalar_output_quant_param(input_scale, input_zero_point,
     return s_prime, z_prime
 
 
+def get_mul_scalar_output_quant_param(input_scale, input_zero_point,
+                                      scalar):
+    # refer to aten/src/ATen/native/quantized/cpu/qmul.cpp
+    q_min = 0
+    q_max = 255
+    self_scale = input_scale
+    self_zero_point = input_zero_point
+    other_val = scalar
+
+    if other_val > 0.0:
+        s_prime = other_val * self_scale
+        z_prime = self_zero_point
+    elif other_val == 0.0:
+        s_prime = 1.0
+        z_prime = 0
+    else:
+        s_prime = abs(other_val) * self_scale
+        z_prime = q_max - (self_zero_point - q_min)
+
+    return s_prime, z_prime
+
+
 def add_output_quant_params_to_scalar_op(node, graph,
                                          input_scale, input_zero_point,
                                          scalar):
     operator = node.kind()
 
     if operator == "quantized::mul_scalar":
-        out_scale = input_scale * scalar
-        out_zero_point = input_zero_point
+        out_scale, out_zero_point = \
+          get_mul_scalar_output_quant_param(input_scale, input_zero_point,
+                                            scalar)
     elif operator == "quantized::add_scalar":
         out_scale, out_zero_point = \
           get_add_scalar_output_quant_param(input_scale, input_zero_point,
@@ -215,7 +238,6 @@ def add_input_quant_params_to_op_inputs(graph):
 
         if operator in ["quantized::add_scalar", "quantized::mul_scalar"]:
             scalar = node.inputsAt(1).node().f("value")
-            assert scalar > 0.0, "only positive scalar supported"
             inp_scale = input_scales[0].node().f("value")
             inp_zero_point = input_zero_points[0].node().i("value")
 
@@ -497,6 +519,28 @@ def _relu6():
     return _impl
 
 
+def _mul_scalar():
+    def _impl(inputs, input_type):
+        # refer to aten/src/ATen/native/quantized/cpu/qmul.cpp
+        assert len(inputs) == 6, "Input quant params not found in op inputs"
+        other_val = inputs[1]  # scalar
+
+        if other_val > 0.0:
+            # only scale change
+            return inputs[0]
+        elif other_val == 0.0:
+            shape = infer_shape(inputs[0])
+            return _op.full(_expr.const(0), shape, dtype="uint8")
+        else:
+            q_min = 0
+            q_max = 255
+            bias = _expr.const(q_max + q_min, dtype="int8")
+            int8 = bias - _op.cast(inputs[0], "int8")
+            return _op.cast(int8, "uint8")
+
+    return _impl
+
+
 convert_map = {
     'aten::quantize_per_tensor': _quantize_per_tensor(),
     'quantized::conv2d_relu': _quantized_conv2d(True),
@@ -510,6 +554,6 @@ convert_map = {
     'quantized::linear_relu': _linear(True),
     'quantized::cat': _cat(),
     'quantized::add_scalar': _add_scalar(),
-    'quantized::mul_scalar': identity(),  # only scale change
+    'quantized::mul_scalar': _mul_scalar(),
     'quantized::relu6': _relu6()
 }

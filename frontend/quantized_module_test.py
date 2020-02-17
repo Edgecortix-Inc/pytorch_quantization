@@ -133,6 +133,22 @@ class SEModule(nn.Module):
         fuse_modules(self.fc, ["0", "1"], inplace=True)
 
 
+class MulScalarNegative(nn.Module):
+    def __init__(self, ):
+        super().__init__()
+        self.float_op = nn.quantized.FloatFunctional()
+        self.quant = QuantStub()
+        self.dequant = DeQuantStub()
+
+    def forward(self, x):
+        x = self.quant(x)
+        mul = self.float_op.mul_scalar(x, -0.3)
+        return self.dequant(mul)
+
+    def fuse_model(self):
+        pass
+
+
 imagenet_ishape = (1, 3, 224, 224)
 
 qmodules = [
@@ -156,6 +172,7 @@ if torch_version_check():
        ("hswish", imagenet_ishape, Hswish(add_stub=True), False),
        ("semodule", (1, 16, 64, 64), SEModule(16, add_stub=True), False),
        ("semodule, per_channel", (1, 16, 64, 64), SEModule(16, add_stub=True), True),
+       ("mul_scalar negative", imagenet_ishape, MulScalarNegative(), False)
     ]
 else:
     print("Skipping tests that requires nightly torch build")
