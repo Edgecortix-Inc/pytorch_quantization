@@ -761,8 +761,19 @@ def _upsample(method):
             coord_trans = "align_corners"
         else:
             coord_trans = "half_pixel"
-        # read that we should actually start to use interpolate(..., mode='bilinear', align_corners=True) instead of upsample
-        return _op.image.resize(data, out_size, "NCHW", "bilinear", coord_trans)
+
+        def func(x):
+            return _op.image.resize(x, out_size, "NCHW", "bilinear", coord_trans)
+
+        print("upsample input type", input_types[0])
+        if input_types[0] == "quint8":
+            assert len(inputs) == 5, "Input quant param not found in op inputs"
+            input_scale = _expr.const(inputs[3])
+            input_zero_point = _expr.const(inputs[4])
+            return qnn_torch.quantized_upsample(data, input_scale,
+                                                input_zero_point, func)
+        return func(data)
+
     return _impl
 
 

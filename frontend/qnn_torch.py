@@ -206,6 +206,7 @@ def add_input_quant_params_to_op_inputs(graph):
                             "quantized::mul": 2,
                             "aten::dequantize": 1,
                             "aten::mean": 1,
+                            "aten::upsample_bilinear2d": 1,
                             "aten::relu_": 1,
                             "aten::relu": 1,
                             "quantized::add_scalar": 1,
@@ -265,6 +266,13 @@ def quantized_adaptive_avg_2d(data, func):
 def quantized_mean(data, input_scale, input_zero_point, func):
     dequantized = relay.qnn.op.dequantize(data, input_scale, input_zero_point)
     out = func(dequantized)
+    return relay.qnn.op.quantize(out, input_scale, input_zero_point,
+                                 out_dtype="uint8", axis=1)
+
+
+def quantized_upsample(data, input_scale, input_zero_point, func):
+    print("uint8 upsample")
+    out = func(_op.cast(data, "float32"))
     return relay.qnn.op.quantize(out, input_scale, input_zero_point,
                                  out_dtype="uint8", axis=1)
 
