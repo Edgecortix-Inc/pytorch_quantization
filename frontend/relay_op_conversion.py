@@ -767,9 +767,9 @@ def _upsample(method):
 
         print("upsample input type", input_types[0])
         if input_types[0] == "quint8":
-            assert len(inputs) == 5, "Input quant param not found in op inputs"
-            input_scale = _expr.const(inputs[3])
-            input_zero_point = _expr.const(inputs[4])
+            assert len(inputs) == 7, "Input quant param not found in op inputs"
+            input_scale = _expr.const(inputs[-2])
+            input_zero_point = _expr.const(inputs[-1])
             return qnn_torch.quantized_upsample(data, input_scale,
                                                 input_zero_point, func)
         return func(data)
