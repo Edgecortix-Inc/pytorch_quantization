@@ -271,8 +271,8 @@ def quantized_mean(data, input_scale, input_zero_point, func):
 
 
 def quantized_upsample(data, input_scale, input_zero_point, func):
-    print("uint8 upsample")
-    out = func(_op.cast(data, "float32"))
+    data = relay.qnn.op.dequantize(data, input_scale, input_zero_point)
+    out = func(data)
     return relay.qnn.op.quantize(out, input_scale, input_zero_point,
                                  out_dtype="uint8", axis=1)
 
