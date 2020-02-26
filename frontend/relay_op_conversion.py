@@ -765,7 +765,6 @@ def _upsample(method):
         def func(x):
             return _op.image.resize(x, out_size, "NCHW", "bilinear", coord_trans)
 
-        print("upsample input type", input_types[0])
         if input_types[0] == "quint8":
             assert len(inputs) == 7, "Input quant param not found in op inputs"
             input_scale = _expr.const(inputs[-2])
