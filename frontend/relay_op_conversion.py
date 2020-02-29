@@ -170,7 +170,7 @@ def _adaptive_avg_2d():
         output_size = _infer_shape(inputs[1])
 
         def func(x):
-            return _op.contrib.contrib.adaptive_avg_pool2d(x, output_size=output_size)
+            return _op.nn.adaptive_avg_pool2d(x, output_size=output_size)
 
         if input_types[0] == "quint8":
             return qnn_torch.quantized_adaptive_avg_2d(data, func)
@@ -184,7 +184,7 @@ def _adaptive_max_2d():
         data = inputs[0]
         output_size = _infer_shape(inputs[1])
 
-        return _op.contrib.contrib.adaptive_max_pool2d(
+        return _op.nn.adaptive_max_pool2d(
             data,
             output_size=output_size)
     return _impl
@@ -516,7 +516,7 @@ def _numtotensor():
         val = inputs[0]
         dtype = type(val)
 
-        if isinstance(val, tvm.expr.IntImm):
+        if isinstance(val, tvm.tir.IntImm):
             val = val.__int__()
             dtype = int
 
