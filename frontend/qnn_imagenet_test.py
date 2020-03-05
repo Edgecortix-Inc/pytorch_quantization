@@ -6,6 +6,7 @@ from torchvision.models.quantization import mobilenet as qmobilenet
 from torchvision.models.quantization import inception as qinception
 from torchvision.models.quantization import googlenet as qgooglenet
 
+from tvm.relay.frontend.pytorch import get_graph_input_names
 
 from eval_imagenet_1k import eval_accuracy, wrap_tvm_model
 from test_util import quantize_model, get_tvm_runtime, get_imagenet_input
@@ -14,8 +15,9 @@ from test_util import torch_version_check
 
 qmodels = [
     ("resnet18", qresnet.resnet18(pretrained=True).eval()),
+    ("resnet50", qresnet.resnet50(pretrained=True).eval()),
     ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
-    ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
+    # ("inception_v3", qinception.inception_v3(pretrained=True).eval()), # inception v3 is very slow to load in torch 1.4
     ("googlenet", qgooglenet(pretrained=True).eval()),
 ]
 
@@ -39,8 +41,6 @@ for (model_name, raw_model) in qmodels:
     else:
         model_name += ", per tensor quantization"
 
-    input_name = 'X'
-    input_shapes = {input_name: (1, 3, 224, 224)}
     inp = get_imagenet_input()
     pt_inp = torch.from_numpy(inp)
 
@@ -51,7 +51,8 @@ for (model_name, raw_model) in qmodels:
         pt_result = script_module(pt_inp).numpy()
         top1_pt, top5_pt = eval_accuracy(script_module)
 
-    runtime = get_tvm_runtime(script_module, input_shapes)
+    input_name = get_graph_input_names(script_module)[0]
+    runtime = get_tvm_runtime(script_module, {input_name: (1, 3, 224, 224)})
     runtime.set_input(input_name, inp)
     runtime.run()
 
