@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import torch
 
@@ -13,11 +15,15 @@ from test_util import quantize_model, get_tvm_runtime, get_imagenet_input
 from test_util import torch_version_check
 
 
+msg = """ Loading inception v3 models on torch 1.4 + torchvision 0.5 takes
+      a very long time (~5min). Remove "inception_v3" below to speed up testing. """
+logging.warning(msg)
+
 qmodels = [
     ("resnet18", qresnet.resnet18(pretrained=True).eval()),
     ("resnet50", qresnet.resnet50(pretrained=True).eval()),
     ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
-    # ("inception_v3", qinception.inception_v3(pretrained=True).eval()), # inception v3 is very slow to load in torch 1.4
+    ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
     ("googlenet", qgooglenet(pretrained=True).eval()),
 ]
 

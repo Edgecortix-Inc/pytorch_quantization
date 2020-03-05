@@ -25,7 +25,7 @@ def get_train_loader(data_path):
     traindir = os.path.join(data_path, 'train')
     dataset = torchvision.datasets.ImageFolder(traindir, get_transform())
     train_sampler = torch.utils.data.SequentialSampler(dataset)
-    train_batch_size = 30
+    train_batch_size = 32
 
     return get_loader(dataset, train_batch_size, train_sampler)
 
@@ -34,7 +34,7 @@ def get_test_loader(data_path):
     valdir = os.path.join(data_path, 'val')
     dataset = torchvision.datasets.ImageFolder(valdir, get_transform())
     test_sampler = torch.utils.data.SequentialSampler(dataset)
-    eval_batch_size = 1
+    eval_batch_size = 16
 
     return get_loader(dataset, eval_batch_size, test_sampler)
 
