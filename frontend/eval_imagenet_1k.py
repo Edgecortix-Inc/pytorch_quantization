@@ -25,7 +25,7 @@ def get_train_loader(data_path):
     traindir = os.path.join(data_path, 'train')
     dataset = torchvision.datasets.ImageFolder(traindir, get_transform())
     train_sampler = torch.utils.data.SequentialSampler(dataset)
-    train_batch_size = 30
+    train_batch_size = 32
 
     return get_loader(dataset, train_batch_size, train_sampler)
 
@@ -34,7 +34,7 @@ def get_test_loader(data_path):
     valdir = os.path.join(data_path, 'val')
     dataset = torchvision.datasets.ImageFolder(valdir, get_transform())
     test_sampler = torch.utils.data.SequentialSampler(dataset)
-    eval_batch_size = 30
+    eval_batch_size = 16
 
     return get_loader(dataset, eval_batch_size, test_sampler)
 
@@ -91,10 +91,10 @@ def accuracy(output, target, topk=(1,)):
         return res
 
 
-def evaluate(model, data_loader, neval_batches, use_cuda):
+def evaluate(model, data_loader, use_cuda):
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
-    cnt = 0
+
     with torch.no_grad():
         for image, target in data_loader:
             if use_cuda:
@@ -107,14 +107,10 @@ def evaluate(model, data_loader, neval_batches, use_cuda):
             if use_cuda:
                 output = output.to("cpu")
 
-            cnt += 1
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
 
             top1.update(acc1[0], image.size(0))
             top5.update(acc5[0], image.size(0))
-
-            if cnt >= neval_batches:
-                return top1, top5
 
     return top1, top5
 
@@ -126,9 +122,8 @@ def eval_accuracy(model_func, use_cuda=False):
         download_imagenet_1k(data_root)
 
     test_loader = get_test_loader(data_dir)
-    num_eval_batches = 10
 
-    return evaluate(model_func, test_loader, num_eval_batches, use_cuda)
+    return evaluate(model_func, test_loader, use_cuda)
 
 
 def wrap_tvm_model(tvm_model, input_name):
