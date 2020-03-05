@@ -1,6 +1,8 @@
 To run evalaution on 1k subset of imagenet data,
 ```python imagenet_test.py```
 
+The dataset and evalation metric are the same as the one in [the PyTorch eager mode quantization tutorial](https://pytorch.org/tutorials/advanced/static_quantization_tutorial.html).
+
 The output should be something like:
 
 ```
@@ -59,3 +61,14 @@ max abs diff: 3.7345514
 mean abs_diff: 0.7947805
 129 in 1000 raw outputs correct.
 ```
+
+At a glance:
+
+model name | Torch-Top1 | Torch-Top5 | TVM-Top1 | TVM-Top5
+-- | -- | -- | -- | --
+resnet18 | 69.7 | 90.2 | 70.0 | 90.1
+resnet50 | 78.1 | 94.1 | 77.7 | 93.7
+inception_v3 | 69.8| 89.5| 68.9 | 89.2
+googlenet| 71.8| 90.5 | 71.6 | 90.6
+mobilenet_v2 | 69.9| 89.4| 71.0 | 89.4
+mobilenet_v3 | 63.5| 83.6| 62.7| 83.2
