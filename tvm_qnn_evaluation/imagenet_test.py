@@ -86,6 +86,7 @@ for (model_name, raw_model) in qmodels:
     inp = get_imagenet_input()
     pt_inp = torch.from_numpy(inp)
 
+    print("Working on %s" % model_name)
     quantize_model(data_dir, raw_model, pt_inp, per_channel=per_channel,
                    dummy=False, max_samples=1000,
                    use_random_data=use_random_data)
