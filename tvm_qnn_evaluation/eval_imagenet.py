@@ -47,10 +47,14 @@ def get_train_loader(data_path, use_random=False):
     return get_loader(dataset, train_batch_size, train_sampler)
 
 
-def get_test_loader(data_path):
+def get_test_loader(data_path, use_random=False):
     valdir = os.path.join(data_path, 'val')
     dataset = torchvision.datasets.ImageFolder(valdir, get_transform())
-    test_sampler = torch.utils.data.SequentialSampler(dataset)
+    if use_random:
+        print("Using random sampler for evaluation")
+        test_sampler = torch.utils.data.RandomSampler(dataset)
+    else:
+        test_sampler = torch.utils.data.SequentialSampler(dataset)
     eval_batch_size = 16
 
     return get_loader(dataset, eval_batch_size, test_sampler)
@@ -60,6 +64,7 @@ def download_imagenet_1k(data_root):
     import wget
     import zipfile
     url = "https://s3.amazonaws.com/pytorch-tutorial-assets/imagenet_1k.zip"
+    print("downloading imagenet_1k dataset")
     file_name = wget.download(url)
 
     with zipfile.ZipFile(file_name) as zip_file:
@@ -143,13 +148,16 @@ def evaluate(model, data_loader, num_eval_samples, use_cuda=False):
 
 
 def eval_accuracy_1k(model_func, data_dir, use_cuda=False):
+    if not os.path.exists(data_dir):
+        download_imagenet_1k(".")
     test_loader = get_test_loader(data_dir)
     return evaluate(model_func, test_loader, 1000, use_cuda)
 
 
 def eval_accuracy_full(model_func, data_dir,
-                       num_eval_samples=50000, use_cuda=False):
-    test_loader = get_test_loader(data_dir)
+                       num_eval_samples=50000, use_cuda=False,
+                       use_random_data=False):
+    test_loader = get_test_loader(data_dir, use_random=use_random_data)
     return evaluate(model_func, test_loader, num_eval_samples, use_cuda)
 
 

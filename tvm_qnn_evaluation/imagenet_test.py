@@ -55,7 +55,7 @@ else:
 
 use_full_data = False
 use_random_data = use_full_data
-num_full_eval_samples = 50000
+num_full_eval_samples = 10000
 
 if use_full_data:
     data_dir = "imagenet_full"  # change here for your setup
@@ -66,7 +66,8 @@ else:
 def eval_func(model_func, use_cuda=False):
     if use_full_data:
         return eval_accuracy_full(model_func, data_dir,
-                                  num_full_eval_samples, use_cuda)
+                                  num_full_eval_samples, use_cuda,
+                                  use_random_data=use_random_data)
     return eval_accuracy_1k(model_func, data_dir, use_cuda)
 
 
