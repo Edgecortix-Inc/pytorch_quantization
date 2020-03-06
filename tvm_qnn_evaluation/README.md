@@ -2,6 +2,8 @@
 Follow [the doc](https://docs.tvm.ai/install/from_source.html) to install TVM from source. LLVM is required. The script depends on the latest feature in TVM, namely the PyTorch frontend including quantized model support. Please make sure you can run [the PyTorch frontend test case](https://github.com/apache/incubator-tvm/blob/master/tests/python/frontend/pytorch/test_forward.py) before preceding further.
 
 
+## Evaluation on Imagenet 1k data (data automatically downloaded)
+
 Before running the script, please set the environment variable `TVM_NUM_THREADS` according to the number of physical cores you have, for example ```export TVM_NUM_THREADS=8```.
 
 To run evalaution on 1k subset of imagenet data,
@@ -92,6 +94,7 @@ mobilenet_v3 small| 63.5| 83.6| 62.7| 83.2
 
 
 ## Evaluation using full Imagenet validation data
+
 You can also use a full imagenet data if you have an access to it. Configure the path to the dataset and the number of images to use for evaluation (max is 50000, the size of full validation data) in `imagenet_test.py`. 10K is a good number.
 
 Calibration is done on random 1k images from train set, and evaluation is on a random subset of the size specified in the script. The default is 50000, all validation images.
