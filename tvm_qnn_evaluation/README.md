@@ -1,3 +1,7 @@
+## TVM installation
+Follow [the doc](https://docs.tvm.ai/install/from_source.html) to install TVM from source. LLVM is required. The script depends on the latest feature in TVM, namely the PyTorch frontend including quantized model support. Please make sure you can run [the PyTorch frontend test case](https://github.com/apache/incubator-tvm/blob/master/tests/python/frontend/pytorch/test_forward.py) before preceding further.
+
+
 Before running the script, please set the environment variable `TVM_NUM_THREADS` according to the number of physical cores you have, for example ```export TVM_NUM_THREADS=8```.
 
 To run evalaution on 1k subset of imagenet data,

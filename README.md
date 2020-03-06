@@ -1,3 +1,12 @@
+## Requirements
+
+```
+PyTorch >= 1.4.0 (> 1.4.0 to trace quantized mobilenet v3 for JIT)
+torchvision >= 0.5.0
+TVM, optional (the latest one built from source, required for QNN evaluation)
+```
+
+
 To run [the PyTorch eager mode quantization tutorial](https://pytorch.org/tutorials/advanced/static_quantization_tutorial.html), cleaned up and modified to use mobilenet v3:
 
 ```python tutorial_eager.py```
