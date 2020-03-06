@@ -1,5 +1,16 @@
+# Quantized model accuracy benchmark: PyTorch vs TVM + QNN
+
+This directory contains an evaluation script for [the PR](https://github.com/apache/incubator-tvm/pull/4977).
+
+Using the Imagenet validation dataset, it compares the accuracy of pretrained, quantized PyTorch models available in [torchvision](https://github.com/pytorch/vision/tree/master/torchvision/models/quantization) and the same model converted to TVM using TVM's PyTorch fronted. The PR above enables translating quantized models, in particular.
+
+In addition to models in torchvision, we also evaluate a quantized Mobilenet v3 model that we implemented. However, due to a missing functionality in PyTorch 1.4, converting this model to TVM requires PyTorch nightly build (1.5 or higher). The script detects the PyTorch version and only include a mobilenet v3 test if the version requirement is met.
+
 ## TVM installation
-Follow [the doc](https://docs.tvm.ai/install/from_source.html) to install TVM from source. LLVM is required. The script depends on the latest feature in TVM, namely the PyTorch frontend including quantized model support. Please make sure you can run [the PyTorch frontend test case](https://github.com/apache/incubator-tvm/blob/master/tests/python/frontend/pytorch/test_forward.py) before preceding further.
+
+Follow [the doc](https://docs.tvm.ai/install/from_source.html) to install TVM from source. LLVM is required.
+
+The script depends on the latest feature in TVM, namely the PyTorch frontend including quantized model support. Please make sure you can run [the PyTorch frontend test case](https://github.com/apache/incubator-tvm/blob/master/tests/python/frontend/pytorch/test_forward.py) before preceding further.
 
 
 ## Evaluation on Imagenet 1k data (data automatically downloaded)
@@ -93,7 +104,7 @@ mobilenet_v2 | 69.9| 89.4| 71.0 | 89.4
 mobilenet_v3 small| 63.5| 83.6| 62.7| 83.2
 
 
-## Evaluation using full Imagenet validation data
+## Evaluation on full Imagenet validation data
 
 You can also use a full imagenet data if you have an access to it. Configure the path to the dataset and the number of images to use for evaluation (max is 50000, the size of full validation data) in `imagenet_test.py`. 10K is a good number.
 
