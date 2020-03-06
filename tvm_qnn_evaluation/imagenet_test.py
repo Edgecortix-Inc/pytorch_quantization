@@ -24,8 +24,8 @@ from torchvision.models.quantization import googlenet as qgooglenet
 
 from tvm.relay.frontend.pytorch import get_graph_input_names
 
-from eval_imagenet_1k import eval_accuracy_1k, eval_accuracy_full
-from eval_imagenet_1k import wrap_tvm_model, download_imagenet_1k
+from eval_imagenet import eval_accuracy_1k, eval_accuracy_full
+from eval_imagenet import wrap_tvm_model, download_imagenet_1k
 from test_util import quantize_model, get_tvm_runtime, get_imagenet_input
 from test_util import torch_version_check
 
@@ -53,8 +53,10 @@ if torch_version_check():
 else:
     print("Mobilenet v3 test requires a nightly build via pip, skipping.")
 
-use_full_data = True
+use_full_data = False
 use_random_data = use_full_data
+num_full_eval_samples = 50000
+
 if use_full_data:
     data_dir = "imagenet_full"  # change here for your setup
 else:
@@ -63,7 +65,8 @@ else:
 
 def eval_func(model_func, use_cuda=False):
     if use_full_data:
-        return eval_accuracy_full(model_func, data_dir, use_cuda)
+        return eval_accuracy_full(model_func, data_dir,
+                                  num_full_eval_samples, use_cuda)
     return eval_accuracy_1k(model_func, data_dir, use_cuda)
 
 
@@ -93,7 +96,7 @@ for (model_name, raw_model) in qmodels:
 
     input_name = get_graph_input_names(script_module)[0]
     runtime = get_tvm_runtime(script_module,
-                              {input_name: (1, 3, 224, 224)}, target="cuda")
+                              {input_name: (1, 3, 224, 224)})
     runtime.set_input(input_name, inp)
     runtime.run()
 

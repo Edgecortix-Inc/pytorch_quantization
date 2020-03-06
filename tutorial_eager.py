@@ -21,8 +21,8 @@ from torch.quantization.observer import MovingAverageMinMaxObserver, default_wei
 
 # from models.qmobilenet_v2  import load_model
 from models.qmobilenet_v3 import load_model
-from frontend.eval_imagenet_1k import get_train_loader
-from frontend.eval_imagenet_1k import eval_accuracy_1k as eval_accuracy
+from frontend.eval_imagenet import get_train_loader
+from frontend.eval_imagenet import eval_accuracy_1k as eval_accuracy
 
 
 # # Setup warnings

@@ -108,12 +108,13 @@ def accuracy(output, target, topk=(1,)):
         return res
 
 
-def evaluate(model, data_loader, use_cuda=False):
+def evaluate(model, data_loader, num_eval_samples, use_cuda=False):
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
 
     t1 = time.time()
     with torch.no_grad():
+        count = 0
         for image, target in data_loader:
             if use_cuda:
                 inp = image.to("cuda")
@@ -130,19 +131,26 @@ def evaluate(model, data_loader, use_cuda=False):
             top1.update(acc1[0], image.size(0))
             top5.update(acc5[0], image.size(0))
 
+            count += inp.size(0)
+
+            if count > num_eval_samples:
+                print("Finished evaluating %d samples." % num_eval_samples)
+                break
+
     t2 = time.time()
     print("Evaluation took %f seconds." % (t2 - t1))
     return top1, top5
 
 
-def eval_accuracy_1k(data_dir, model_func, use_cuda=False):
+def eval_accuracy_1k(model_func, data_dir, use_cuda=False):
     test_loader = get_test_loader(data_dir)
-    return evaluate(model_func, test_loader, use_cuda)
+    return evaluate(model_func, test_loader, 1000, use_cuda)
 
 
-def eval_accuracy_full(model_func, data_dir, use_cuda=False):
+def eval_accuracy_full(model_func, data_dir,
+                       num_eval_samples=50000, use_cuda=False):
     test_loader = get_test_loader(data_dir)
-    return evaluate(model_func, test_loader, use_cuda)
+    return evaluate(model_func, test_loader, num_eval_samples, use_cuda)
 
 
 def wrap_tvm_model(tvm_model, input_name):

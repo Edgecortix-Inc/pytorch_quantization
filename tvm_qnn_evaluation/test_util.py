@@ -22,7 +22,7 @@ import torch
 from torch.quantization.observer import MovingAverageMinMaxObserver
 from torch.quantization.observer import default_weight_observer
 
-from eval_imagenet_1k import get_train_loader, get_transform
+from eval_imagenet import get_train_loader, get_transform
 
 
 def get_qconfig(per_channel):
