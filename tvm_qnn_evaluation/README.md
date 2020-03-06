@@ -1,4 +1,4 @@
-# Quantized model accuracy benchmark: PyTorch vs TVM + QNN
+# Quantized model accuracy benchmark: PyTorch vs TVM
 
 This directory contains an evaluation script for [the PR](https://github.com/apache/incubator-tvm/pull/4977).
 
@@ -119,4 +119,4 @@ resnet50 | 76.10 | 92.92 | 75.88| 92.80
 inception_v3 | 70.31| 88.54| 70.24 | 88.60
 googlenet| 69.88 | 89.31| 69.46| 89.13
 mobilenet_v2 | 67.33 | 87.58 | 67.98| 88.23
-mobilenet_v3 | 59.49| 82.01| 59.21| 81.88
+mobilenet_v3 small| 59.49| 82.01| 59.21| 81.88

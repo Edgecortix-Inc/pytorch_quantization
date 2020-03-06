@@ -1,6 +1,10 @@
 ## Requirements
 
 ```
+wget (pip install wget)
+packaging (pip install packaging)
+numpy
+Pillow >= 0.7
 PyTorch >= 1.4.0 (> 1.4.0 to trace quantized mobilenet v3 for JIT)
 torchvision >= 0.5.0
 TVM, optional (the latest one built from source, required for QNN evaluation)
