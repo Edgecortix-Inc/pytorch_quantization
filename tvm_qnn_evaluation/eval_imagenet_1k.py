@@ -1,4 +1,18 @@
+# (C) Copyright 2020 EdgeCortix Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
 import os
+import time
 import numpy as np
 import torch
 import torchvision
@@ -21,10 +35,13 @@ def get_loader(dataset, batch_size, sampler):
                                        sampler=sampler)
 
 
-def get_train_loader(data_path):
+def get_train_loader(data_path, use_random=False):
     traindir = os.path.join(data_path, 'train')
     dataset = torchvision.datasets.ImageFolder(traindir, get_transform())
-    train_sampler = torch.utils.data.SequentialSampler(dataset)
+    if use_random:
+        train_sampler = torch.utils.data.RandomSampler(dataset)
+    else:
+        train_sampler = torch.utils.data.SequentialSampler(dataset)
     train_batch_size = 32
 
     return get_loader(dataset, train_batch_size, train_sampler)
@@ -91,10 +108,11 @@ def accuracy(output, target, topk=(1,)):
         return res
 
 
-def evaluate(model, data_loader, use_cuda):
+def evaluate(model, data_loader, use_cuda=False):
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
 
+    t1 = time.time()
     with torch.no_grad():
         for image, target in data_loader:
             if use_cuda:
@@ -112,17 +130,18 @@ def evaluate(model, data_loader, use_cuda):
             top1.update(acc1[0], image.size(0))
             top5.update(acc5[0], image.size(0))
 
+    t2 = time.time()
+    print("Evaluation took %f seconds." % (t2 - t1))
     return top1, top5
 
 
-def eval_accuracy(model_func, use_cuda=False):
-    data_root = "."
-    data_dir = "imagenet_1k"
-    if not os.path.exists(os.path.join(data_root, data_dir)):
-        download_imagenet_1k(data_root)
-
+def eval_accuracy_1k(data_dir, model_func, use_cuda=False):
     test_loader = get_test_loader(data_dir)
+    return evaluate(model_func, test_loader, use_cuda)
 
+
+def eval_accuracy_full(model_func, data_dir, use_cuda=False):
+    test_loader = get_test_loader(data_dir)
     return evaluate(model_func, test_loader, use_cuda)
 
 
