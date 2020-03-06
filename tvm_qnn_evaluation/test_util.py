@@ -1,3 +1,16 @@
+# (C) Copyright 2020 EdgeCortix Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
 import os
 from packaging import version
 from PIL import Image
@@ -9,8 +22,7 @@ import torch
 from torch.quantization.observer import MovingAverageMinMaxObserver
 from torch.quantization.observer import default_weight_observer
 
-from eval_imagenet_1k import get_train_loader, download_imagenet_1k
-from eval_imagenet_1k import get_transform
+from eval_imagenet import get_train_loader, get_transform
 
 
 def get_qconfig(per_channel):
@@ -22,7 +34,8 @@ def get_qconfig(per_channel):
                                           weight=default_weight_observer)
 
 
-def quantize_model(model, inp, per_channel=False, dummy=True):
+def quantize_model(data_dir, model, inp, per_channel=False, dummy=True,
+                   max_samples=1000, use_random_data=False):
     model.fuse_model()
     model.qconfig = get_qconfig(per_channel)
     torch.quantization.prepare(model, inplace=True)
@@ -30,29 +43,30 @@ def quantize_model(model, inp, per_channel=False, dummy=True):
     if dummy:
         model(inp)
     else:
-        data_root = "."
-        data_dir = "imagenet_1k"
-        if not os.path.exists(os.path.join(data_root, data_dir)):
-            download_imagenet_1k(data_root)
-
         print("\nCalibrating on real data...")
-        for image, _ in get_train_loader(data_dir):
+        print("data dir:", data_dir)
+        count = 0
+        for image, _ in get_train_loader(data_dir, use_random_data):
             with torch.no_grad():
                 model(image)
+            count += image.size(0)
+            if count > max_samples:
+                print("max sample %d reached" % max_samples)
+                break
 
         print("Done.")
 
     torch.quantization.convert(model, inplace=True)
 
 
-def get_tvm_runtime(script_module, input_shapes):
+def get_tvm_runtime(script_module, input_shapes,
+                    target="llvm -mcpu=core-avx2"):
     mod, params = relay.frontend.from_pytorch(script_module, input_shapes)
 
     with relay.build_config(opt_level=3):
-        json, lib, params = relay.build(mod, target="llvm -mcpu=core-avx2",
-                                        params=params)
+        json, lib, params = relay.build(mod, target=target, params=params)
 
-    runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.cpu(0))
+    runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context(target, 0))
     runtime.set_input(**params)
     return runtime
 

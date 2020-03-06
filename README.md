@@ -6,4 +6,4 @@ The directory ```models``` contains eager-mode, quantization-ready implementatio
 
 The script `auto_quant.py` is an experiment on Torch automatic quantization support. It can be run but currently convolution is performed on fp32. Keep an eye on [this thread](https://discuss.pytorch.org/t/current-status-of-automatic-quantization-support/66905) to track the progress of the development.
 
-The directory ```frontend``` contains an implementation and test cases of a translator from quantized PyTorch models to TVM QNN. Unless you are interested in TVM, you can ignore this directory.
+The directory ```tvm_qnn_evaluation``` contains an evaluation script for TVM QNN implementation in the [PR](https://github.com/apache/incubator-tvm/pull/4977). Unless you are interested in TVM, you can ignore this directory. See the README there for details.
