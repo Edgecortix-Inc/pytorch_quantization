@@ -92,7 +92,7 @@ mean abs_diff: 0.7947805
 129 in 1000 raw outputs correct.
 ```
 
-At a glance (all INT8 bit quantized):
+At a glance (all 8 bit quantized):
 
 Model name | Torch-Top1 | Torch-Top5 | TVM-Top1 | TVM-Top5
 -- | -- | -- | -- | --
@@ -110,7 +110,7 @@ You can also use a full imagenet data if you have an access to it. Configure the
 
 Calibration is done on random 1k images from train set, and evaluation is on a random subset of the size specified in the script. The default is 50000, all validation images.
 
-Here is a result on 10k images (all INT8 bit quantized):
+Here is a result on 10k images (all 8 bit quantized):
 
 Model name | Torch-Top1 | Torch-Top5 | TVM-Top1 | TVM-Top5
 -- | -- | -- | -- | --
