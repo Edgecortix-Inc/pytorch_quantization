@@ -1,3 +1,20 @@
+# Quantized model accuracy benchmark: PyTorch vs TVM
+
+This directory contains an evaluation script for [the PR](https://github.com/apache/incubator-tvm/pull/4977).
+
+Using the Imagenet validation dataset, it compares the accuracy of pretrained, quantized PyTorch models available in [torchvision](https://github.com/pytorch/vision/tree/master/torchvision/models/quantization) and the same model converted to TVM using TVM's PyTorch fronted. The PR above enables translating quantized models, in particular.
+
+In addition to models in torchvision, we also evaluate a quantized Mobilenet v3 model that we implemented. However, due to a missing functionality in PyTorch 1.4, converting this model to TVM requires PyTorch nightly build (1.5 or higher). The script detects the PyTorch version and only include a mobilenet v3 test if the version requirement is met.
+
+## TVM installation
+
+Follow [the doc](https://docs.tvm.ai/install/from_source.html) to install TVM from source. LLVM is required.
+
+The script depends on the latest feature in TVM, namely the PyTorch frontend including quantized model support. Please make sure you can run [the PyTorch frontend test case](https://github.com/apache/incubator-tvm/blob/master/tests/python/frontend/pytorch/test_forward.py) before preceding further.
+
+
+## Evaluation on Imagenet 1k data (data automatically downloaded)
+
 Before running the script, please set the environment variable `TVM_NUM_THREADS` according to the number of physical cores you have, for example ```export TVM_NUM_THREADS=8```.
 
 To run evalaution on 1k subset of imagenet data,
@@ -75,9 +92,9 @@ mean abs_diff: 0.7947805
 129 in 1000 raw outputs correct.
 ```
 
-At a glance:
+At a glance (all 8 bit quantized):
 
-model name | Torch-Top1 | Torch-Top5 | TVM-Top1 | TVM-Top5
+Model name | Torch-Top1 | Torch-Top5 | TVM-Top1 | TVM-Top5
 -- | -- | -- | -- | --
 resnet18 | 69.7 | 90.2 | 70.0 | 90.1
 resnet50 | 78.1 | 94.1 | 77.7 | 93.7
@@ -87,18 +104,19 @@ mobilenet_v2 | 69.9| 89.4| 71.0 | 89.4
 mobilenet_v3 small| 63.5| 83.6| 62.7| 83.2
 
 
-## Evaluation using full Imagenet validation data
+## Evaluation on full Imagenet validation data
+
 You can also use a full imagenet data if you have an access to it. Configure the path to the dataset and the number of images to use for evaluation (max is 50000, the size of full validation data) in `imagenet_test.py`. 10K is a good number.
 
 Calibration is done on random 1k images from train set, and evaluation is on a random subset of the size specified in the script. The default is 50000, all validation images.
 
-Here is a result on 10k images:
+Here is a result on 10k images (all 8 bit quantized):
 
-model name | Torch-Top1 | Torch-Top5 | TVM-Top1 | TVM-Top5
+Model name | Torch-Top1 | Torch-Top5 | TVM-Top1 | TVM-Top5
 -- | -- | -- | -- | --
 resnet18 | 68.87 | 88.30 | 69.43| 88.46
 resnet50 | 76.10 | 92.92 | 75.88| 92.80
 inception_v3 | 70.31| 88.54| 70.24 | 88.60
 googlenet| 69.88 | 89.31| 69.46| 89.13
 mobilenet_v2 | 67.33 | 87.58 | 67.98| 88.23
-mobilenet_v3 | 59.49| 82.01| 59.21| 81.88
+mobilenet_v3 small| 59.49| 82.01| 59.21| 81.88
