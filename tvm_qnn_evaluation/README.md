@@ -114,12 +114,12 @@ Here is a result on 10k images (all 8 bit quantized):
 
 Model name | Torch-Top1 | Torch-Top5 | TVM-Top1 | TVM-Top5
 -- | -- | -- | -- | --
-resnet18 | 68.87 | 88.30 | 69.43| 88.46
-resnet50 | 76.10 | 92.92 | 75.88| 92.80
-inception_v3 | 70.31| 88.54| 70.24 | 88.60
-googlenet| 69.88 | 89.31| 69.46| 89.13
-mobilenet_v2 | 67.33 | 87.58 | 67.98| 88.23
-mobilenet_v3 small| 59.49| 82.01| 59.21| 81.88
+resnet18 | 69.04 | 88.79| 68.87|88.77
+resnet50 | 75.94 | 92.68| 75.95| 92.55
+inception_v3 | 69.07| 88.25| 68.97|88.46
+googlenet| 69.41| 89.47| 69.40| 89.44
+mobilenet_v2 | 66.41 | 87.31| 67.52 | 87.87
+mobilenet_v3 small| 60.21| 82.86| 60.58| 82.60
 
 
 For completeness, here is a result on full dataset (50000 images).
