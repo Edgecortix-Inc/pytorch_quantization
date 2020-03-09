@@ -17,6 +17,18 @@ import numpy as np
 import torch
 import torchvision
 import torchvision.transforms as transforms
+from torch.utils.data import Sampler
+
+
+class RandomIndicesSampler(Sampler):
+    def __init__(self, indices):
+        self.indices = indices
+
+    def __iter__(self):
+        return iter(self.indices)
+
+    def __len__(self):
+        return len(self.indices)
 
 
 def get_transform():
@@ -47,12 +59,13 @@ def get_train_loader(data_path, use_random=False):
     return get_loader(dataset, train_batch_size, train_sampler)
 
 
-def get_test_loader(data_path, use_random=False):
+def get_test_loader(data_path, use_random=False, indices=None):
     valdir = os.path.join(data_path, 'val')
     dataset = torchvision.datasets.ImageFolder(valdir, get_transform())
     if use_random:
         print("Using random sampler for evaluation")
-        test_sampler = torch.utils.data.RandomSampler(dataset)
+        assert indices is not None, "A random set of indices is required"
+        test_sampler = RandomIndicesSampler(indices)
     else:
         test_sampler = torch.utils.data.SequentialSampler(dataset)
     eval_batch_size = 16
@@ -138,12 +151,10 @@ def evaluate(model, data_loader, num_eval_samples, use_cuda=False):
 
             count += inp.size(0)
 
-            if count > num_eval_samples:
-                print("Finished evaluating %d samples." % num_eval_samples)
-                break
-
     t2 = time.time()
+    print("Evaluated %d samples." % count)
     print("Evaluation took %f seconds." % (t2 - t1))
+
     return top1, top5
 
 
@@ -151,14 +162,14 @@ def eval_accuracy_1k(model_func, data_dir, use_cuda=False):
     if not os.path.exists(data_dir):
         download_imagenet_1k(".")
     test_loader = get_test_loader(data_dir)
-    return evaluate(model_func, test_loader, 1000, use_cuda)
+    return evaluate(model_func, test_loader, use_cuda)
 
 
-def eval_accuracy_full(model_func, data_dir,
-                       num_eval_samples=50000, use_cuda=False,
-                       use_random_data=False):
-    test_loader = get_test_loader(data_dir, use_random=use_random_data)
-    return evaluate(model_func, test_loader, num_eval_samples, use_cuda)
+def eval_accuracy_full(model_func, data_dir, use_cuda=False,
+                       use_random_data=False, indices=None):
+    test_loader = get_test_loader(data_dir, use_random=use_random_data,
+                                  indices=indices)
+    return evaluate(model_func, test_loader, use_cuda)
 
 
 def wrap_tvm_model(tvm_model, input_name):
@@ -174,3 +185,16 @@ def wrap_tvm_model(tvm_model, input_name):
         return torch.from_numpy(tvm_results)
 
     return model_func
+
+
+def test_sampler_deterministic():
+    indices = np.random.choice(np.arange(50000),
+                               size=10000,
+                               replace=False)
+
+    sampler = RandomIndicesSampler(indices)
+
+    samples1 = [ind for ind in sampler]
+    samples2 = [ind for ind in sampler]
+
+    assert samples1 == samples2
