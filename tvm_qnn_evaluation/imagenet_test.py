@@ -35,11 +35,11 @@ msg = """ Loading inception v3 models on torch 1.4 + torchvision 0.5 takes
 logging.warning(msg)
 
 qmodels = [
-    ("resnet18", qresnet.resnet18(pretrained=True).eval()),
-    ("resnet50", qresnet.resnet50(pretrained=True).eval()),
-    ("mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()),
-    ("inception_v3", qinception.inception_v3(pretrained=True).eval()),
-    ("googlenet", qgooglenet(pretrained=True).eval()),
+    ("resnet18", False, qresnet.resnet18(pretrained=True).eval()),
+    ("resnet50", False, qresnet.resnet50(pretrained=True).eval()),
+    ("mobilenet_v2", True, qmobilenet.mobilenet_v2(pretrained=True).eval()),
+    ("inception_v3", False, qinception.inception_v3(pretrained=True).eval()),
+    ("googlenet", False, qgooglenet(pretrained=True).eval()),
 ]
 
 if torch_version_check():
@@ -49,14 +49,14 @@ if torch_version_check():
     from qmobilenet_v3 import load_model
 
     model_file = "../data/mobilenetv3small-f3be529c.pth"
-    qmodels.append(("mobilenet_v3 small", load_model(model_file).eval()))
+    qmodels.append(("mobilenet_v3 small", False, load_model(model_file).eval()))
 else:
     print("Mobilenet v3 test requires a nightly build via pip, skipping.")
 
 use_full_data = False
 use_random_data = use_full_data
 val_data_size = 50000
-num_full_eval_samples = 10000
+num_full_eval_samples = 50000
 # This is to make sure we use the same random subsets for torch and tvm
 indices = np.random.choice(np.arange(val_data_size),
                            size=num_full_eval_samples,
@@ -83,7 +83,7 @@ if not use_full_data and not os.path.exists("imagenet_1k"):
 per_channel = True
 results = []
 
-for (model_name, raw_model) in qmodels:
+for (model_name, dummy_calib, raw_model) in qmodels:
     if per_channel:
         model_name += ", per channel quantization"
     else:
@@ -94,7 +94,7 @@ for (model_name, raw_model) in qmodels:
 
     print("Working on %s" % model_name)
     quantize_model(data_dir, raw_model, pt_inp, per_channel=per_channel,
-                   dummy=False, max_samples=1000,
+                   dummy=dummy_calib, max_samples=1000,
                    use_random_data=use_random_data)
     script_module = torch.jit.trace(raw_model, pt_inp).eval()
 
