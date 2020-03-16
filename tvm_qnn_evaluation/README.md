@@ -6,6 +6,8 @@ Using the Imagenet validation dataset, it compares the accuracy of pretrained, q
 
 In addition to models in torchvision, we also evaluate a quantized Mobilenet v3 model that we implemented. However, due to a missing functionality in PyTorch 1.4, converting this model to TVM requires PyTorch nightly build (1.5 or higher). The script detects the PyTorch version and only include a mobilenet v3 test if the version requirement is met.
 
+Note that since [this PR](https://github.com/apache/incubator-tvm/pull/5061), TVM translation of PyTorch quantized add/mul/concatenate ops deviate from PyTorch implementation, and they use QNN's implementation of corresponding ops, which do not produce floating point values in the middle. On the other hand, PyTorch v1.4 piggy backs to FP32 ops for its quantized add/mul/concatenate by way of dequantize -> FP32 op -> quantize.
+
 ## TVM installation
 
 Follow [the doc](https://docs.tvm.ai/install/from_source.html) to install TVM from source. LLVM is required.
@@ -26,82 +28,83 @@ The output should be something like:
 
 ```
 Model name: resnet18, per channel quantization
-PyTorch accuracy: Top1 = 69.70, Top5 = 90.20
-TVM accuracy: Top1 = 70.00, Top5 = 90.10
-PyTorch top5 label: [101 386 385 340 351]
-TVM top5 label: [101 386 385 354 340]
-PyTorch top5 raw output: [17.519054 17.206213 14.703492  8.133846  8.133846]
-TVM top5 raw output: [17.519054 17.206213 14.703492  8.759527  8.446687]
-max abs diff: 0.6256809
-mean abs_diff: 0.10198592
-675 in 1000 raw outputs correct.
+PyTorch accuracy: Top1 = 69.10, Top5 = 89.60
+TVM accuracy: Top1 = 68.70, Top5 = 89.90
+PyTorch top5 label: [101 386 385 340 354]
+TVM top5 label: [101 386 385 340 351]
+PyTorch top5 raw output: [18.008299 17.13693  14.813278  8.423237  8.13278 ]
+TVM top5 raw output: [17.717844 16.846474 14.232366  8.423237  8.13278 ]
+max abs diff: 0.87136936
+mean abs_diff: 0.14464732
+532 in 1000 raw outputs correct.
 
 Model name: resnet50, per channel quantization
-PyTorch accuracy: Top1 = 78.10, Top5 = 94.10
-TVM accuracy: Top1 = 77.70, Top5 = 93.70
-PyTorch top5 label: [101 386 385  51 354]
-TVM top5 label: [386 101 385  51 354]
-PyTorch top5 raw output: [16.671005  16.671005  11.497245   8.622933   6.6109157]
-TVM top5 raw output: [16.096142  16.096142  10.922382   8.335503   6.3234844]
-max abs diff: 0.57486343
-mean abs_diff: 0.10175061
-653 in 1000 raw outputs correct.
+PyTorch accuracy: Top1 = 78.20, Top5 = 94.30
+TVM accuracy: Top1 = 78.00, Top5 = 94.10
+PyTorch top5 label: [386 101 385  51 497]
+TVM top5 label: [386 101 385  51 497]
+PyTorch top5 raw output: [16.261482 16.261482 11.257949  8.130741  5.941695]
+TVM top5 raw output: [15.636041  15.636041  10.945229   7.5052996  5.941695 ]
+max abs diff: 0.6254416
+mean abs_diff: 0.10257242
+677 in 1000 raw outputs correct.
 
 Model name: mobilenet_v2, per channel quantization
-PyTorch accuracy: Top1 = 69.90, Top5 = 89.40
-TVM accuracy: Top1 = 71.00, Top5 = 89.40
-PyTorch top5 label: [101 386 385  51  69]
-TVM top5 label: [101 386 385  51  69]
-PyTorch top5 raw output: [19.986526 18.400295 16.17957  15.545077 11.420873]
-TVM top5 raw output: [19.034788  17.448555  14.593337  13.641598   9.8346405]
-max abs diff: 3.4897113
-mean abs_diff: 1.0450097
-85 in 1000 raw outputs correct.
+PyTorch accuracy: Top1 = 72.10, Top5 = 90.50
+TVM accuracy: Top1 = 72.00, Top5 = 90.40
+PyTorch top5 label: [101 386 385  51  48]
+TVM top5 label: [101 386 385  51  48]
+PyTorch top5 raw output: [22.078398 20.878485 18.718641 15.118902 10.559234]
+TVM top5 raw output: [21.838415 20.39852  18.238676 14.87892  10.799216]
+max abs diff: 0.9599304
+mean abs_diff: 0.17518729
+393 in 1000 raw outputs correct.
 
 Model name: inception_v3, per channel quantization
-PyTorch accuracy: Top1 = 69.80, Top5 = 89.50
-TVM accuracy: Top1 = 68.90, Top5 = 89.20
-PyTorch top5 label: [101 386 385  48  51]
-TVM top5 label: [101 386 385  48 750]
-PyTorch top5 raw output: [18.322927  17.406782  15.574489   5.8022604  3.9699678]
-TVM top5 raw output: [16.796017  16.490635  13.436813   4.580732   3.9699678]
-max abs diff: 2.1376753
-mean abs_diff: 0.33378264
-294 in 1000 raw outputs correct.
+PyTorch accuracy: Top1 = 77.70, Top5 = 95.20
+TVM accuracy: Top1 = 77.50, Top5 = 94.70
+PyTorch top5 label: [386 101 385  48 677]
+TVM top5 label: [386 101 385 677  48]
+PyTorch top5 raw output: [9.398839  8.727493  5.706438  2.014037  1.8462006]
+TVM top5 raw output: [8.223984  7.720475  4.6994195 1.6783642 1.6783642]
+max abs diff: 1.1748552
+mean abs_diff: 0.12654865
+389 in 1000 raw outputs correct.
 
 Model name: googlenet, per channel quantization
-PyTorch accuracy: Top1 = 71.80, Top5 = 90.50
-TVM accuracy: Top1 = 71.60, Top5 = 90.60
-PyTorch top5 label: [101 386 385  51  69]
-TVM top5 label: [101 386 385  51  69]
-PyTorch top5 raw output: [11.26868   10.932301  10.427733   5.045677   3.3637848]
-TVM top5 raw output: [10.932301  10.595922  10.091354   4.877488   3.3637848]
-max abs diff: 0.33637905
-mean abs_diff: 0.07602153
-572 in 1000 raw outputs correct.
+PyTorch accuracy: Top1 = 71.90, Top5 = 90.40
+TVM accuracy: Top1 = 72.00, Top5 = 90.80
+PyTorch top5 label: [101 386 385  51 474]
+TVM top5 label: [101 386 385  51 112]
+PyTorch top5 raw output: [10.483846 10.134384  9.784923  4.368269  2.970423]
+TVM top5 raw output: [10.134384   9.784923   9.610192   4.368269   3.1451538]
+max abs diff: 0.34946156
+mean abs_diff: 0.05696223
+679 in 1000 raw outputs correct.
 
 Model name: mobilenet_v3 small, per channel quantization
-PyTorch accuracy: Top1 = 63.50, Top5 = 83.60
-TVM accuracy: Top1 = 62.70, Top5 = 83.20
-PyTorch top5 label: [386 101 385 354  51]
-TVM top5 label: [101 386 385 354  51]
-PyTorch top5 raw output: [19.691273 19.012262 17.654243 12.561673 12.222169]
-TVM top5 raw output: [20.370281 20.030777 18.333254 12.561673 11.882664]
-max abs diff: 3.7345514
-mean abs_diff: 0.7947805
-129 in 1000 raw outputs correct.
+PyTorch accuracy: Top1 = 64.60, Top5 = 84.50
+TVM accuracy: Top1 = 64.40, Top5 = 85.10
+PyTorch top5 label: [101 386 385 354  51]
+TVM top5 label: [101 386 385  51 354]
+PyTorch top5 raw output: [19.869387 19.869387 18.450146 12.418366 12.063557]
+TVM top5 raw output: [20.933819 20.579008 19.159765 12.773177 12.418366]
+max abs diff: 3.1932943
+mean abs_diff: 0.77774465
+141 in 1000 raw outputs correct.
+
 ```
 
 At a glance (all 8 bit quantized):
 
 Model name | Torch-Top1 | Torch-Top5 | TVM-Top1 | TVM-Top5
 -- | -- | -- | -- | --
-resnet18 | 69.7 | 90.2 | 70.0 | 90.1
-resnet50 | 78.1 | 94.1 | 77.7 | 93.7
-inception_v3 | 69.8| 89.5| 68.9 | 89.2
-googlenet| 71.8| 90.5 | 71.6 | 90.6
-mobilenet_v2 | 69.9| 89.4| 71.0 | 89.4
-mobilenet_v3 small| 63.5| 83.6| 62.7| 83.2
+resnet18|69.10|89.60|68.70|89.90
+resnet50|78.20|94.30|78.00|94.10
+mobilenet_v2|72.10|90.50|72.00|90.40
+inception_v3|77.70|95.20|77.50|94.70
+googlenet|71.90|90.40|72.00|90.80
+mobilenet_v3 small|64.60|84.50|64.40|85.10
 
 
 ## Evaluation on full Imagenet validation data
@@ -114,21 +117,21 @@ Here is a result on 10k images (all 8 bit quantized):
 
 Model name | Torch-Top1 | Torch-Top5 | TVM-Top1 | TVM-Top5
 -- | -- | -- | -- | --
-resnet18 | 69.04 | 88.79| 68.87|88.77
-resnet50 | 75.94 | 92.68| 75.95| 92.55
-inception_v3 | 69.07| 88.25| 68.97|88.46
-googlenet| 69.41| 89.47| 69.40| 89.44
-mobilenet_v2 | 66.41 | 87.31| 67.52 | 87.87
-mobilenet_v3 small| 60.21| 82.86| 60.58| 82.60
+resnet18|69.49|88.67|69.63|88.47
+resnet50|75.88|92.64|75.84|92.67
+mobilenet_v2|70.43|89.48|70.61|89.44
+inception_v3|77.65|93.36|77.28|93.18
+googlenet|69.59|89.34|69.37|89.28
+mobilenet_v3 small|59.78|82.11|59.22|81.44
 
 
 For completeness, here is a result on full dataset (50000 images).
 
 Model name | Torch-Top1 | Torch-Top5 | TVM-Top1 | TVM-Top5
 -- | -- | -- | -- | --
-resnet18 | 69.58 | 88.94 | 69.46 | 88.97
-resnet50 | 75.83 | 92.82| 75.84| 92.78
-inception_v3 | 69.30| 88.41 | 69.18|88.42
-googlenet| 69.61| 89.38| 69.54| 89.36
-mobilenet_v2 |  68.23 |88.47 | 69.00|88.72
-mobilenet_v3 small| 59.80| 82.19| 59.65| 81.93
+resnet18|69.45|88.93|69.54|88.92
+resnet50|75.87|92.85|75.82|92.80
+mobilenet_v2|70.66|89.69|70.65|89.62
+inception_v3|77.12|93.32|76.88|93.22
+googlenet|69.64|89.42|69.58|89.43
+mobilenet_v3 small|60.92|82.82|60.42|82.55

@@ -31,12 +31,20 @@ class RandomIndicesSampler(Sampler):
         return len(self.indices)
 
 
-def get_transform():
+def get_transform(inception=False):
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
+    resize = 256
+    crop = 224
+
+    if inception:
+        print("Preprocessing for inception")
+        resize = 342
+        crop = 299
+
     return transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
+            transforms.Resize(resize),
+            transforms.CenterCrop(crop),
             transforms.ToTensor(),
             normalize,
         ])
@@ -47,9 +55,10 @@ def get_loader(dataset, batch_size, sampler):
                                        sampler=sampler)
 
 
-def get_train_loader(data_path, use_random=False):
+def get_train_loader(data_path, use_random=False, inception=False):
     traindir = os.path.join(data_path, 'train')
-    dataset = torchvision.datasets.ImageFolder(traindir, get_transform())
+    dataset = torchvision.datasets.ImageFolder(traindir,
+                                               get_transform(inception))
     if use_random:
         train_sampler = torch.utils.data.RandomSampler(dataset)
     else:
@@ -59,9 +68,11 @@ def get_train_loader(data_path, use_random=False):
     return get_loader(dataset, train_batch_size, train_sampler)
 
 
-def get_test_loader(data_path, use_random=False, indices=None):
+def get_test_loader(data_path, use_random=False,
+                    indices=None, inception=False):
     valdir = os.path.join(data_path, 'val')
-    dataset = torchvision.datasets.ImageFolder(valdir, get_transform())
+    dataset = torchvision.datasets.ImageFolder(valdir,
+                                               get_transform(inception))
     if use_random:
         print("Using random sampler for evaluation")
         assert indices is not None, "A random set of indices is required"
@@ -158,17 +169,18 @@ def evaluate(model, data_loader, num_eval_samples, use_cuda=False):
     return top1, top5
 
 
-def eval_accuracy_1k(model_func, data_dir, use_cuda=False):
+def eval_accuracy_1k(model_func, data_dir, use_cuda=False, inception=False):
     if not os.path.exists(data_dir):
         download_imagenet_1k(".")
-    test_loader = get_test_loader(data_dir)
+    test_loader = get_test_loader(data_dir, inception=inception)
     return evaluate(model_func, test_loader, use_cuda)
 
 
 def eval_accuracy_full(model_func, data_dir, use_cuda=False,
-                       use_random_data=False, indices=None):
+                       use_random_data=False, indices=None,
+                       inception=False):
     test_loader = get_test_loader(data_dir, use_random=use_random_data,
-                                  indices=indices)
+                                  indices=indices, inception=inception)
     return evaluate(model_func, test_loader, use_cuda)
 
 

@@ -35,7 +35,7 @@ def get_qconfig(per_channel):
 
 
 def quantize_model(data_dir, model, inp, per_channel=False, dummy=True,
-                   max_samples=1000, use_random_data=False):
+                   max_samples=1000, use_random_data=False, inception=False):
     model.fuse_model()
     model.qconfig = get_qconfig(per_channel)
     torch.quantization.prepare(model, inplace=True)
@@ -46,7 +46,7 @@ def quantize_model(data_dir, model, inp, per_channel=False, dummy=True,
         print("\nCalibrating on real data...")
         print("data dir:", data_dir)
         count = 0
-        for image, _ in get_train_loader(data_dir, use_random_data):
+        for image, _ in get_train_loader(data_dir, use_random_data, inception):
             with torch.no_grad():
                 model(image)
             count += image.size(0)
@@ -71,17 +71,17 @@ def get_tvm_runtime(script_module, input_shapes,
     return runtime
 
 
-def get_real_image(im_height, im_width):
+def get_real_image():
     repo_base = 'https://github.com/dmlc/web-data/raw/master/tensorflow/models/InceptionV1/'
     img_name = 'elephant-299.jpg'
     image_url = os.path.join(repo_base, img_name)
     img_path = download_testdata(image_url, img_name, module='data')
-    return Image.open(img_path).resize((im_height, im_width))
+    return Image.open(img_path)
 
 
-def get_imagenet_input():
-    im = get_real_image(224, 224)
-    preprocess = get_transform()
+def get_imagenet_input(inception=False):
+    im = get_real_image()
+    preprocess = get_transform(inception)
     pt_tensor = preprocess(im)
     return np.expand_dims(pt_tensor.numpy(), 0)
 
