@@ -12,6 +12,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 import logging
+import time
 import os
 
 import numpy as np
@@ -22,8 +23,8 @@ from torchvision.models.quantization import mobilenet as qmobilenet
 from torchvision.models.quantization import inception as qinception
 from torchvision.models.quantization import googlenet as qgooglenet
 
+import tvm
 from tvm.relay.frontend.pytorch import get_graph_input_names
-from tvm.relay.testing.temp_op_attr import TempOpAttr
 
 
 from eval_imagenet import eval_accuracy_1k, eval_accuracy_full
@@ -32,8 +33,23 @@ from test_util import quantize_model, get_tvm_runtime, get_imagenet_input
 from test_util import torch_version_check
 
 
-def legalize_qnn_conv2d(attrs, inputs, types):
-    return None
+def perf_bench(pt_model, tvm_model, ishape):
+    n_repeat = 100
+    ctx = tvm.cpu(0)
+    ftimer = tvm_model.module.time_evaluator("run", ctx, number=1,
+                                             repeat=n_repeat)
+    prof_res = np.array(ftimer().results) * 1e3
+    print("TVM elapsed ms:", np.mean(prof_res))
+
+    inp = torch.rand(ishape)
+    for i in range(3):
+        pt_model(inp)
+
+    t1 = time.time()
+    for i in range(n_repeat):
+        pt_model(inp)
+    t2 = time.time()
+    print("Torch elapsed ms:", (t2 - t1) * 1e3 / n_repeat)
 
 
 msg = """ Loading inception v3 models on torch 1.4 + torchvision 0.5 takes
@@ -60,10 +76,11 @@ if torch_version_check():
 else:
     print("Mobilenet v3 test requires a nightly build via pip, skipping.")
 
+do_perf_bench = False
 use_full_data = False
 use_random_data = use_full_data
 val_data_size = 50000
-num_full_eval_samples = 10000
+num_full_eval_samples = 50000
 # This is to make sure we use the same random subsets for torch and tvm
 indices = np.random.choice(np.arange(val_data_size),
                            size=num_full_eval_samples,
@@ -108,7 +125,6 @@ for (model_name, dummy_calib, raw_model) in qmodels:
     with torch.no_grad():
         pt_result = script_module(pt_inp).numpy()
 
-    # with TempOpAttr("qnn.conv2d", "FTVMQnnLegalize", legalize_qnn_conv2d):
     input_name = get_graph_input_names(script_module)[0]
     runtime = get_tvm_runtime(script_module,
                               {input_name: inp.shape})
@@ -116,12 +132,16 @@ for (model_name, dummy_calib, raw_model) in qmodels:
     runtime.run()
     tvm_result = runtime.get_output(0).asnumpy()
 
-    top1_pt, top5_pt = eval_func(script_module, inception=inception)
-    top1_tvm, top5_tvm = eval_func(wrap_tvm_model(runtime, input_name),
-                                   inception=inception)
+    if do_perf_bench:
+        perf_bench(script_module, runtime, inp.shape)
+    else:
+        top1_pt, top5_pt = eval_func(script_module, inception=inception)
+        top1_tvm, top5_tvm = eval_func(wrap_tvm_model(runtime, input_name),
+                                       inception=inception)
 
-    results.append((model_name, pt_result[0], tvm_result[0],
-                    top1_pt, top5_pt, top1_tvm, top5_tvm))
+        results.append((model_name, pt_result[0], tvm_result[0],
+                        top1_pt, top5_pt, top1_tvm, top5_tvm))
+
 
 # For markdown table
 rows = ["Model name | Torch-Top1 | Torch-Top5 | TVM-Top1 | TVM-Top5",
