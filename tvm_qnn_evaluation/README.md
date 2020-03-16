@@ -6,6 +6,8 @@ Using the Imagenet validation dataset, it compares the accuracy of pretrained, q
 
 In addition to models in torchvision, we also evaluate a quantized Mobilenet v3 model that we implemented. However, due to a missing functionality in PyTorch 1.4, converting this model to TVM requires PyTorch nightly build (1.5 or higher). The script detects the PyTorch version and only include a mobilenet v3 test if the version requirement is met.
 
+Note that since [this PR](https://github.com/apache/incubator-tvm/pull/5061), TVM translation of PyTorch quantized add/mul/concatenate ops deviate from PyTorch implementation, and they use QNN's implementation of corresponding ops, which do not produce floating point values in the middle. On the other hand, PyTorch v1.4 piggy backs to FP32 ops for its quantized add/mul/concatenate by way of dequantize -> FP32 op -> quantize.
+
 ## TVM installation
 
 Follow [the doc](https://docs.tvm.ai/install/from_source.html) to install TVM from source. LLVM is required.
