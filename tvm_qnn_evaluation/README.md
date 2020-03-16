@@ -129,9 +129,9 @@ For completeness, here is a result on full dataset (50000 images).
 
 Model name | Torch-Top1 | Torch-Top5 | TVM-Top1 | TVM-Top5
 -- | -- | -- | -- | --
-resnet18 | 69.58 | 88.94 | 69.46 | 88.97
-resnet50 | 75.83 | 92.82| 75.84| 92.78
-inception_v3 | 69.30| 88.41 | 69.18|88.42
-googlenet| 69.61| 89.38| 69.54| 89.36
-mobilenet_v2 |  68.23 |88.47 | 69.00|88.72
-mobilenet_v3 small| 59.80| 82.19| 59.65| 81.93
+resnet18|69.45|88.93|69.54|88.92
+resnet50|75.87|92.85|75.82|92.80
+mobilenet_v2|70.66|89.69|70.65|89.62
+inception_v3|77.12|93.32|76.88|93.22
+googlenet|69.64|89.42|69.58|89.43
+mobilenet_v3 small|60.92|82.82|60.42|82.55
