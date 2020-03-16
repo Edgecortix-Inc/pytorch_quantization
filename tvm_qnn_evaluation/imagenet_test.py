@@ -23,6 +23,8 @@ from torchvision.models.quantization import inception as qinception
 from torchvision.models.quantization import googlenet as qgooglenet
 
 from tvm.relay.frontend.pytorch import get_graph_input_names
+from tvm.relay.testing.temp_op_attr import TempOpAttr
+
 
 from eval_imagenet import eval_accuracy_1k, eval_accuracy_full
 from eval_imagenet import wrap_tvm_model, download_imagenet_1k
@@ -30,10 +32,15 @@ from test_util import quantize_model, get_tvm_runtime, get_imagenet_input
 from test_util import torch_version_check
 
 
+def legalize_qnn_conv2d(attrs, inputs, types):
+    return None
+
+
 msg = """ Loading inception v3 models on torch 1.4 + torchvision 0.5 takes
       a very long time (~5min). Remove "inception_v3" below to speed up testing. """
 logging.warning(msg)
 
+# Mobilenet v2 was trained using QAT, post training calibration is disabled
 qmodels = [
     ("resnet18", False, qresnet.resnet18(pretrained=True).eval()),
     ("resnet50", False, qresnet.resnet50(pretrained=True).eval()),
@@ -56,7 +63,7 @@ else:
 use_full_data = False
 use_random_data = use_full_data
 val_data_size = 50000
-num_full_eval_samples = 50000
+num_full_eval_samples = 10000
 # This is to make sure we use the same random subsets for torch and tvm
 indices = np.random.choice(np.arange(val_data_size),
                            size=num_full_eval_samples,
@@ -68,13 +75,11 @@ else:
     data_dir = "imagenet_1k"
 
 
-def eval_func(model_func, use_cuda=False):
+def eval_func(model_func, use_cuda=False, inception=False):
     if use_full_data:
-        return eval_accuracy_full(model_func, data_dir,
-                                  use_cuda=use_cuda,
-                                  use_random_data=use_random_data,
-                                  indices=indices)
-    return eval_accuracy_1k(model_func, data_dir, use_cuda)
+        return eval_accuracy_full(model_func, data_dir, use_cuda,
+                                  use_random_data, indices, inception)
+    return eval_accuracy_1k(model_func, data_dir, use_cuda, inception)
 
 
 if not use_full_data and not os.path.exists("imagenet_1k"):
@@ -89,31 +94,38 @@ for (model_name, dummy_calib, raw_model) in qmodels:
     else:
         model_name += ", per tensor quantization"
 
-    inp = get_imagenet_input()
+    inception = isinstance(raw_model, qinception.QuantizableInception3)
+
+    inp = get_imagenet_input(inception)
     pt_inp = torch.from_numpy(inp)
 
-    print("Working on %s" % model_name)
+    print("\nWorking on %s" % model_name)
     quantize_model(data_dir, raw_model, pt_inp, per_channel=per_channel,
                    dummy=dummy_calib, max_samples=1000,
-                   use_random_data=use_random_data)
+                   use_random_data=use_random_data, inception=inception)
     script_module = torch.jit.trace(raw_model, pt_inp).eval()
 
     with torch.no_grad():
         pt_result = script_module(pt_inp).numpy()
-        top1_pt, top5_pt = eval_func(script_module)
 
+    # with TempOpAttr("qnn.conv2d", "FTVMQnnLegalize", legalize_qnn_conv2d):
     input_name = get_graph_input_names(script_module)[0]
     runtime = get_tvm_runtime(script_module,
-                              {input_name: (1, 3, 224, 224)})
+                              {input_name: inp.shape})
     runtime.set_input(input_name, inp)
     runtime.run()
-
     tvm_result = runtime.get_output(0).asnumpy()
 
-    top1_tvm, top5_tvm = eval_func(wrap_tvm_model(runtime, input_name))
+    top1_pt, top5_pt = eval_func(script_module, inception=inception)
+    top1_tvm, top5_tvm = eval_func(wrap_tvm_model(runtime, input_name),
+                                   inception=inception)
 
     results.append((model_name, pt_result[0], tvm_result[0],
                     top1_pt, top5_pt, top1_tvm, top5_tvm))
+
+# For markdown table
+rows = ["Model name | Torch-Top1 | Torch-Top5 | TVM-Top1 | TVM-Top5",
+        "-- | -- | -- | -- | --"]
 
 for (model_name, pt_result, tvm_result,
      top1_pt, top5_pt, top1_tvm, top5_tvm) in results:
@@ -131,3 +143,15 @@ for (model_name, pt_result, tvm_result,
     print("max abs diff:", max_abs_diff)
     print("mean abs_diff:", mean_abs_diff)
     print("%d in 1000 raw outputs correct." % num_correct)
+
+    def float_to_str(v):
+        return "%2.2f" % v
+
+    accs = [float_to_str(acc) for acc in
+            [top1_pt.avg, top5_pt.avg, top1_tvm.avg, top5_tvm.avg]]
+    rows.append("|".join([model_name] + accs))
+
+table = "\n".join(rows)
+
+print()
+print(table)
