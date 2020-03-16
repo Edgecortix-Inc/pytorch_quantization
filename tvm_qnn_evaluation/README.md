@@ -97,12 +97,12 @@ At a glance (all 8 bit quantized):
 
 Model name | Torch-Top1 | Torch-Top5 | TVM-Top1 | TVM-Top5
 -- | -- | -- | -- | --
-resnet18, per channel quantization|69.10|89.60|68.70|89.90
-resnet50, per channel quantization|78.20|94.30|78.00|94.10
-mobilenet_v2, per channel quantization|72.10|90.50|72.00|90.40
-inception_v3, per channel quantization|77.70|95.20|77.50|94.70
-googlenet, per channel quantization|71.90|90.40|72.00|90.80
-mobilenet_v3 small, per channel quantization|64.60|84.50|64.40|85.10
+resnet18|69.10|89.60|68.70|89.90
+resnet50|78.20|94.30|78.00|94.10
+mobilenet_v2|72.10|90.50|72.00|90.40
+inception_v3|77.70|95.20|77.50|94.70
+googlenet|71.90|90.40|72.00|90.80
+mobilenet_v3 small|64.60|84.50|64.40|85.10
 
 
 ## Evaluation on full Imagenet validation data
@@ -115,12 +115,12 @@ Here is a result on 10k images (all 8 bit quantized):
 
 Model name | Torch-Top1 | Torch-Top5 | TVM-Top1 | TVM-Top5
 -- | -- | -- | -- | --
-resnet18 | 69.04 | 88.79| 68.87|88.77
-resnet50 | 75.94 | 92.68| 75.95| 92.55
-inception_v3 | 69.07| 88.25| 68.97|88.46
-googlenet| 69.41| 89.47| 69.40| 89.44
-mobilenet_v2 | 66.41 | 87.31| 67.52 | 87.87
-mobilenet_v3 small| 60.21| 82.86| 60.58| 82.60
+resnet18|69.49|88.67|69.63|88.47
+resnet50|75.88|92.64|75.84|92.67
+mobilenet_v2|70.43|89.48|70.61|89.44
+inception_v3|77.65|93.36|77.28|93.18
+googlenet|69.59|89.34|69.37|89.28
+mobilenet_v3 small|59.78|82.11|59.22|81.44
 
 
 For completeness, here is a result on full dataset (50000 images).
