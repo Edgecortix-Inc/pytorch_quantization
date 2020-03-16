@@ -94,12 +94,12 @@ for (model_name, dummy_calib, raw_model) in qmodels:
     else:
         model_name += ", per tensor quantization"
 
-    inception = isinstance(raw_model, qinception.QuantizableInception3)
+    print("\nWorking on %s" % model_name)
 
+    inception = isinstance(raw_model, qinception.QuantizableInception3)
     inp = get_imagenet_input(inception)
     pt_inp = torch.from_numpy(inp)
 
-    print("\nWorking on %s" % model_name)
     quantize_model(data_dir, raw_model, pt_inp, per_channel=per_channel,
                    dummy=dummy_calib, max_samples=1000,
                    use_random_data=use_random_data, inception=inception)
