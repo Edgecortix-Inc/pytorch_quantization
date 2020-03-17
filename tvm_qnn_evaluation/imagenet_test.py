@@ -41,15 +41,18 @@ def perf_bench(pt_model, tvm_model, ishape):
     prof_res = np.array(ftimer().results) * 1e3
     print("TVM elapsed ms:", np.mean(prof_res))
 
-    inp = torch.rand(ishape)
-    for i in range(3):
-        pt_model(inp)
+    with torch.no_grad():
+        inp = torch.rand(ishape)
+        pt_model.eval()
 
-    t1 = time.time()
-    for i in range(n_repeat):
-        pt_model(inp)
-    t2 = time.time()
-    print("Torch elapsed ms:", (t2 - t1) * 1e3 / n_repeat)
+        for i in range(3):
+            pt_model(inp)
+
+        t1 = time.time()
+        for i in range(n_repeat):
+            pt_model(inp)
+        t2 = time.time()
+        print("Torch elapsed ms:", (t2 - t1) * 1e3 / n_repeat)
 
 
 msg = """ Loading inception v3 models on torch 1.4 + torchvision 0.5 takes
