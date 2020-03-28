@@ -38,6 +38,7 @@ warnings.filterwarnings(
 
 # Specify random seed for repeatable results
 torch.manual_seed(191009)
+torch.backends.quantized.engine = 'qnnpack'
 
 
 def print_size_of_model(model):
@@ -65,7 +66,7 @@ float_model.eval()
 # Fuses modules
 float_model.fuse_model()
 
-print('\n Inverted Residual Block: After fusion\n\n',float_model.features[1].conv)
+print('\n Inverted Residual Block: After fusion\n\n', float_model.features[1].conv)
 
 print("Size of baseline model")
 original_size = print_size_of_model(float_model)
@@ -78,9 +79,7 @@ per_tensor_quantized_model.eval()
 # Fuse Conv, bn and relu
 per_tensor_quantized_model.fuse_model()
 
-act = MovingAverageMinMaxObserver.with_args(reduce_range=False)
-per_tensor_quantized_model.qconfig = torch.quantization.QConfig(activation=act,
-                                                                weight=default_weight_observer)
+per_tensor_quantized_model.qconfig = torch.quantization.get_default_qconfig('qnnpack')
 print(per_tensor_quantized_model.qconfig)
 torch.quantization.prepare(per_tensor_quantized_model, inplace=True)
 
@@ -106,21 +105,7 @@ quantized_size = print_size_of_model(per_tensor_quantized_model)
 top1_per_tensor, top5_per_tensor = eval_accuracy(per_tensor_quantized_model, data_dir)
 print('Per tensor quantization accuracy: %2.2f' % top1_per_tensor.avg)
 
-per_channel_quantized_model = load_model(saved_model_dir + float_model_file)
-per_channel_quantized_model.eval()
-per_channel_quantized_model.fuse_model()
-per_channel_quantized_model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
-print(per_channel_quantized_model.qconfig)
-
-torch.quantization.prepare(per_channel_quantized_model, inplace=True)
-
-for image, _ in get_train_loader("imagenet_1k"):
-    per_channel_quantized_model(image)
-
-torch.quantization.convert(per_channel_quantized_model, inplace=True)
-top1_per_channel, top5_per_channel = eval_accuracy(per_channel_quantized_model, data_dir)
 
 print('\nFP32 accuracy: %2.2f' % top1_fp32.avg)
 print('Per tensor quantization accuracy: %2.2f' % top1_per_tensor.avg)
-print('Per channel quantization accuracy: %2.2f' % top1_per_channel.avg)
 print('Model compression ratio (original to quantized): ', original_size/quantized_size)
