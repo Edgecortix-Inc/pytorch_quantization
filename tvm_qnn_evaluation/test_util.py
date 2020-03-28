@@ -15,23 +15,19 @@ import os
 from packaging import version
 from PIL import Image
 import numpy as np
-import tvm
+
 from tvm import relay
 from tvm.contrib.download import download_testdata
-import torch
-from torch.quantization.observer import MovingAverageMinMaxObserver
-from torch.quantization.observer import default_weight_observer
+import tvm.contrib.graph_runtime as runtime
+from tvm.contrib.util import tempdir
 
-from eval_imagenet import get_train_loader, get_transform
+import torch
+
+from eval_imagenet import get_transform
 
 
 def get_qconfig(per_channel):
-    if per_channel:
-        return torch.quantization.get_default_qconfig('fbgemm')
-    else:
-        act = MovingAverageMinMaxObserver.with_args(reduce_range=False)
-        return torch.quantization.QConfig(activation=act,
-                                          weight=default_weight_observer)
+    return torch.quantization.get_default_qconfig('qnnpack')
 
 
 def quantize_model(data_dir, model, inp, per_channel=False, dummy=True,
@@ -39,36 +35,30 @@ def quantize_model(data_dir, model, inp, per_channel=False, dummy=True,
     model.fuse_model()
     model.qconfig = get_qconfig(per_channel)
     torch.quantization.prepare(model, inplace=True)
-
-    if dummy:
-        model(inp)
-    else:
-        print("\nCalibrating on real data...")
-        print("data dir:", data_dir)
-        count = 0
-        for image, _ in get_train_loader(data_dir, use_random_data, inception):
-            with torch.no_grad():
-                model(image)
-            count += image.size(0)
-            if count > max_samples:
-                print("max sample %d reached" % max_samples)
-                break
-
-        print("Done.")
-
+    model(inp)
     torch.quantization.convert(model, inplace=True)
 
 
-def get_tvm_runtime(script_module, input_shapes,
-                    target="llvm -mcpu=core-avx2"):
+def get_tvm_runtime(script_module, input_shapes, name, remote):
     mod, params = relay.frontend.from_pytorch(script_module, input_shapes)
+
+    target = "llvm -device=arm_cpu -target=aarch64-unknown-linux-gnu -mattr=+neon"
 
     with relay.build_config(opt_level=3):
         json, lib, params = relay.build(mod, target=target, params=params)
 
-    runtime = tvm.contrib.graph_runtime.create(json, lib, tvm.context(target, 0))
-    runtime.set_input(**params)
-    return runtime
+    tmp = tempdir()
+    filename = "%s.tar" % name
+    lib.export_library(tmp.relpath(filename))
+
+    ctx = remote.context(str(target), 0)
+    remote.upload(tmp.relpath(filename))
+
+    rlib = remote.load_module(filename)
+    module = runtime.create(json, rlib, ctx)
+
+    module.set_input(**params)
+    return module, ctx
 
 
 def get_real_image():
