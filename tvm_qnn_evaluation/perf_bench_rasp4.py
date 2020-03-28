@@ -43,7 +43,10 @@ def perf_bench_torch(pt_model, ishape):
             pt_model(inp)
         t2 = time.time()
 
-        print("Torch elapsed ms:", (t2 - t1) * 1e3 / n_repeat)
+        elapsed = (t2 - t1) * 1e3 / n_repeat
+        print("Torch elapsed ms:", elapsed)
+
+        return elapsed
 
 
 def perf_bench_tvm(tvm_model, ishape, ctx):
@@ -51,7 +54,9 @@ def perf_bench_tvm(tvm_model, ishape, ctx):
     ftimer = tvm_model.module.time_evaluator("run", ctx, number=1,
                                              repeat=n_repeat)
     prof_res = np.array(ftimer().results) * 1e3
-    print("TVM elapsed ms:", np.mean(prof_res))
+    elapsed = np.mean(prof_res)
+    print("TVM elapsed ms:", elapsed)
+    return elapsed
 
 
 msg = """ Loading inception v3 models on torch 1.4 + torchvision 0.5 takes
@@ -71,7 +76,11 @@ data_dir = "imagenet_1k"
 bench_torch = False  # True to run on device
 
 if not bench_torch:
+    # Change IP below to rasp4's IP
+    # Run "python3 -m tvm.exec.rpc_server --host 0.0.0.0 --port=9090" on the device
     remote = tvm.rpc.connect("192.168.129.130", 9090)
+
+results = []
 
 for (model_name, dummy_calib, raw_model) in qmodels:
     inception = isinstance(raw_model, qinception.QuantizableInception3)
@@ -86,7 +95,8 @@ for (model_name, dummy_calib, raw_model) in qmodels:
     print("\nBenchmarking on %s" % model_name)
 
     if bench_torch:
-        perf_bench_torch(script_module, inp.shape)
+        elapsed = perf_bench_torch(script_module, inp.shape)
+        results.append((model_name, elapsed))
         continue
 
     input_name = get_graph_input_names(script_module)[0]
@@ -94,4 +104,8 @@ for (model_name, dummy_calib, raw_model) in qmodels:
                                    model_name, remote)
     runtime.set_input(input_name, inp)
 
-    perf_bench_tvm(runtime, inp.shape, ctx)
+    elapsed = perf_bench_tvm(runtime, inp.shape, ctx)
+    results.append((model_name, elapsed))
+
+for model, elapsed in results:
+    print("%s: %f ms" % (model, elapsed))
