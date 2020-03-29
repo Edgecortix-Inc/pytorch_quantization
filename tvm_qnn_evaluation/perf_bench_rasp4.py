@@ -75,7 +75,9 @@ qmodels = [
 data_dir = "imagenet_1k"
 bench_torch = False  # True to run on device
 
-if not bench_torch:
+if bench_torch:
+    torch.backends.quantized.engine = 'qnnpack'
+else:
     # Change IP below to rasp4's IP
     # Run "python3 -m tvm.exec.rpc_server --host 0.0.0.0 --port=9090" on the device
     remote = tvm.rpc.connect("192.168.129.130", 9090)
@@ -109,3 +111,30 @@ for (model_name, dummy_calib, raw_model) in qmodels:
 
 for model, elapsed in results:
     print("%s: %f ms" % (model, elapsed))
+
+"""
+TVM result, 4 threads
+resnet18: 143.521838 ms
+resnet50: 374.103667 ms
+mobilenet_v2: 143.667530 ms
+inception_v3: 642.415026 ms
+googlenet: 137.338346 ms
+"""
+
+"""
+Torch result, 1 threads (default)
+resnet18: 389.009070 ms
+resnet50: 902.637765 ms
+mobilenet_v2: 88.816326 ms
+inception_v3: 1181.927047 ms
+googlenet: 348.094938 ms
+"""
+
+"""
+TVM, 1 thread
+resnet18: 513.758577 ms
+resnet50: 1311.888599 ms
+mobilenet_v2: 243.085368 ms
+inception_v3: 1785.427319 ms
+googlenet: 487.233631 ms
+"""
