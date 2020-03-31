@@ -20,6 +20,7 @@ from tvm import relay
 from tvm.contrib.download import download_testdata
 import tvm.contrib.graph_runtime as runtime
 from tvm.contrib.util import tempdir
+from tvm import autotvm
 
 import torch
 
@@ -39,13 +40,17 @@ def quantize_model(data_dir, model, inp, per_channel=False, dummy=True,
     torch.quantization.convert(model, inplace=True)
 
 
-def get_tvm_runtime(script_module, input_shapes, name, remote):
+def get_tvm_runtime(script_module, input_shapes, name,
+                    remote, target, log_file):
     mod, params = relay.frontend.from_pytorch(script_module, input_shapes)
 
-    target = "llvm -device=arm_cpu -target=aarch64-unknown-linux-gnu -mattr=+neon"
-
-    with relay.build_config(opt_level=3):
-        json, lib, params = relay.build(mod, target=target, params=params)
+    if os.path.exists(log_file):
+        with autotvm.apply_history_best(log_file):
+            with relay.build_config(opt_level=3):
+                json, lib, params = relay.build(mod, target=target, params=params)
+    else:
+        with relay.build_config(opt_level=3):
+            json, lib, params = relay.build(mod, target=target, params=params)
 
     tmp = tempdir()
     filename = "%s.tar" % name

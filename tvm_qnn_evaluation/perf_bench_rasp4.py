@@ -82,6 +82,7 @@ else:
     # Run "python3 -m tvm.exec.rpc_server --host 0.0.0.0 --port=9090" on the device
     remote = tvm.rpc.connect("192.168.129.130", 9090)
 
+target = "llvm -device=arm_cpu -target=aarch64-unknown-linux-gnu -mattr=+neon"
 results = []
 
 for (model_name, dummy_calib, raw_model) in qmodels:
@@ -101,9 +102,10 @@ for (model_name, dummy_calib, raw_model) in qmodels:
         results.append((model_name, elapsed))
         continue
 
+    log_file = "%s.log" % model_name
     input_name = get_graph_input_names(script_module)[0]
     runtime, ctx = get_tvm_runtime(script_module, {input_name: inp.shape},
-                                   model_name, remote)
+                                   model_name, remote, target, log_file)
     runtime.set_input(input_name, inp)
 
     elapsed = perf_bench_tvm(runtime, inp.shape, ctx)
@@ -114,11 +116,11 @@ for model, elapsed in results:
 
 """
 TVM result, 4 threads
-resnet18: 143.521838 ms
-resnet50: 374.103667 ms
-mobilenet_v2: 143.667530 ms
-inception_v3: 642.415026 ms
-googlenet: 137.338346 ms
+resnet18: 144.072410 ms
+resnet50: 371.739979 ms
+mobilenet_v2: 45.302733 ms
+inception_v3: 632.424179 ms
+googlenet: 134.315899 ms
 """
 
 """
