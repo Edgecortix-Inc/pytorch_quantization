@@ -11,8 +11,6 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
-import logging
-import time
 import os
 
 import numpy as np
@@ -26,9 +24,6 @@ from torchvision.models.quantization import googlenet as qgooglenet
 from tvm import autotvm
 from tvm import relay
 from tvm.autotvm.tuner import XGBTuner, GATuner, RandomTuner, GridSearchTuner
-from tvm.autotvm.graph_tuner import DPTuner, PBQPTuner
-
-import tvm
 from tvm.relay.frontend.pytorch import get_graph_input_names
 
 from test_util import quantize_model, get_tvm_runtime, get_imagenet_input
@@ -92,7 +87,6 @@ def tune_tasks(tasks,
 
 
 def run_tuning(script_module, input_shapes, target, log_file, port, key):
-    print(input_shapes)
     mod, params = relay.frontend.from_pytorch(script_module, input_shapes)
 
     tuning_option = {
@@ -118,52 +112,42 @@ def run_tuning(script_module, input_shapes, target, log_file, port, key):
     tune_tasks(tasks, **tuning_option)
 
 
-# Mobilenet v2 was trained using QAT, post training calibration is disabled
-qmodels = [
-    ("resnet18", False, qresnet.resnet18(pretrained=True).eval()),
-    # ("resnet50", False, qresnet.resnet50(pretrained=True).eval()),
-    # ("mobilenet_v2", True, qmobilenet.mobilenet_v2(pretrained=True).eval()),
-    # ("inception_v3", False, qinception.inception_v3(pretrained=True).eval()),
-    # ("googlenet", False, qgooglenet(pretrained=True).eval()),
-]
+model_name, raw_model = "resnet18", qresnet.resnet18(pretrained=True).eval()
+# model_name, raw_model = "resnet50", qresnet.resnet50(pretrained=True).eval()
+# model_name, raw_model = "mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()
+# model_name, raw_model = "inception_v3", qinception.inception_v3(pretrained=True).eval()
+# model_name, raw_model = "googlenet", qgooglenet(pretrained=True).eval()
 
 data_dir = "imagenet_1k"
 
-port = 9190
-key = "rasp4"
 # On host, python -m tvm.exec.rpc_tracker --host=0.0.0.0 --port=9190
 # On device, python3 -m tvm.exec.rpc_server --tracker=192.168.129.122:9190 --key=rasp4
+port = 9190
+key = "rasp4"
+target = "llvm -device=arm_cpu -target=aarch64-unknown-linux-gnu -mattr=+neon"
+
+inception = isinstance(raw_model, qinception.QuantizableInception3)
+inp = get_imagenet_input(inception)
+pt_inp = torch.from_numpy(inp)
+
+quantize_model(data_dir, raw_model, pt_inp, per_channel=False,
+               dummy=True, max_samples=1000, use_random_data=True, inception=inception)
+
+script_module = torch.jit.trace(raw_model, pt_inp).eval()
+
+log_file = "autotvm_logs/%s.log" % model_name
+input_name = get_graph_input_names(script_module)[0]
+input_shapes = {input_name: inp.shape}
+
+run_tuning(script_module, input_shapes, target, log_file, port, key)
 
 remote = autotvm.measure.request_remote(key, '0.0.0.0', port, timeout=10000)
 
-target = "llvm -device=arm_cpu -target=aarch64-unknown-linux-gnu -mattr=+neon"
-# target = 'llvm -device=arm_cpu -target=armv8a-linux-gnueabihf -mattr=+neon,fp-armv8,thumb-mode -mfloat-abi=hard'
+runtime, ctx = get_tvm_runtime(script_module, input_shapes,
+                               model_name, remote, target, log_file)
+runtime.set_input(input_name, inp)
 
-results = []
+print("\nBenchmarking on %s" % model_name)
+elapsed = perf_bench_tvm(runtime, inp.shape, ctx)
 
-for (model_name, dummy_calib, raw_model) in qmodels:
-    inception = isinstance(raw_model, qinception.QuantizableInception3)
-    inp = get_imagenet_input(inception)
-    pt_inp = torch.from_numpy(inp)
-
-    quantize_model(data_dir, raw_model, pt_inp, per_channel=False,
-                   dummy=True, max_samples=1000,
-                   use_random_data=True, inception=inception)
-    script_module = torch.jit.trace(raw_model, pt_inp).eval()
-
-    log_file = "%s.log" % model_name
-    input_name = get_graph_input_names(script_module)[0]
-    input_shapes = {input_name: inp.shape}
-
-    run_tuning(script_module, input_shapes, target, log_file, port, key)
-
-    runtime, ctx = get_tvm_runtime(script_module, input_shapes,
-                                   model_name, remote, target, log_file)
-    runtime.set_input(input_name, inp)
-
-    print("\nBenchmarking on %s" % model_name)
-    elapsed = perf_bench_tvm(runtime, inp.shape, ctx)
-    results.append((model_name, elapsed))
-
-for model, elapsed in results:
-    print("%s: %f ms" % (model, elapsed))
+print("%s: %f ms" % (model_name, elapsed))

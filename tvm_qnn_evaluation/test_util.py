@@ -45,10 +45,12 @@ def get_tvm_runtime(script_module, input_shapes, name,
     mod, params = relay.frontend.from_pytorch(script_module, input_shapes)
 
     if os.path.exists(log_file):
+        print("Applying log file from %s" % log_file)
         with autotvm.apply_history_best(log_file):
             with relay.build_config(opt_level=3):
                 json, lib, params = relay.build(mod, target=target, params=params)
     else:
+        print("Using default schedules")
         with relay.build_config(opt_level=3):
             json, lib, params = relay.build(mod, target=target, params=params)
 

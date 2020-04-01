@@ -80,7 +80,7 @@ if bench_torch:
 else:
     # Change IP below to rasp4's IP
     # Run "python3 -m tvm.exec.rpc_server --host 0.0.0.0 --port=9090" on the device
-    remote = tvm.rpc.connect("192.168.129.130", 9090)
+    remote = tvm.rpc.connect("192.168.129.137", 9090)
 
 target = "llvm -device=arm_cpu -target=aarch64-unknown-linux-gnu -mattr=+neon"
 results = []
@@ -102,7 +102,7 @@ for (model_name, dummy_calib, raw_model) in qmodels:
         results.append((model_name, elapsed))
         continue
 
-    log_file = "%s.log" % model_name
+    log_file = "autotvm_logs/%s.log" % model_name
     input_name = get_graph_input_names(script_module)[0]
     runtime, ctx = get_tvm_runtime(script_module, {input_name: inp.shape},
                                    model_name, remote, target, log_file)
