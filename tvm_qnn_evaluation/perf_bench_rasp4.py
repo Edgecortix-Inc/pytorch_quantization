@@ -115,28 +115,28 @@ for model, elapsed in results:
     print("%s: %f ms" % (model, elapsed))
 
 """
-TVM result, 4 threads
-resnet18: 144.072410 ms
-resnet50: 371.739979 ms
-mobilenet_v2: 45.302733 ms
-inception_v3: 632.424179 ms
-googlenet: 134.315899 ms
-"""
+resnet18
+TVM 4T: 107.497946 ms
+TVM 1T: 324.460178 ms
+Torch: 389.009070 ms
 
-"""
-Torch result, 1 threads (default)
-resnet18: 389.009070 ms
-resnet50: 902.637765 ms
-mobilenet_v2: 88.816326 ms
-inception_v3: 1181.927047 ms
-googlenet: 348.094938 ms
-"""
+resnet50
+TVM 4T: 274.470837 ms
+TVM 1T: 931.914834 ms
+Torch: 902.637765 ms
 
-"""
-TVM, 1 thread
-resnet18: 513.758577 ms
-resnet50: 1311.888599 ms
-mobilenet_v2: 243.085368 ms
-inception_v3: 1785.427319 ms
-googlenet: 487.233631 ms
+mobilenet v2
+TVM 4T: 49.016217 ms
+TVM 1T: 157.990846 ms
+Torch: 88.816326 ms
+
+inception v3
+TVM 4T: 414.570064 ms
+TVM 1T: 1375.075061 ms
+Torch: 1181.927047 ms
+
+googlenet
+TVM 4T: 97.443174 ms
+TVM 1T: 327.224869 ms
+Torch: 348.094938 ms
 """
