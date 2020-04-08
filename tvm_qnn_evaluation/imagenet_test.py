@@ -24,8 +24,6 @@ from torchvision.models.quantization import inception as qinception
 from torchvision.models.quantization import googlenet as qgooglenet
 
 import tvm
-from tvm.relay.frontend.pytorch import get_graph_input_names
-
 
 from eval_imagenet import eval_accuracy_1k, eval_accuracy_full
 from eval_imagenet import wrap_tvm_model, download_imagenet_1k
@@ -128,9 +126,9 @@ for (model_name, dummy_calib, raw_model) in qmodels:
     with torch.no_grad():
         pt_result = script_module(pt_inp).numpy()
 
-    input_name = get_graph_input_names(script_module)[0]
+    input_name = "input"
     runtime = get_tvm_runtime(script_module,
-                              {input_name: inp.shape})
+                              [(input_name, inp.shape)])
     runtime.set_input(input_name, inp)
     runtime.run()
     tvm_result = runtime.get_output(0).asnumpy()
