@@ -1,3 +1,5 @@
+(C) Copyright EdgeCortix Inc. 2020
+
 # Eager mode quantization in PyTorch
 
 To run [the PyTorch eager mode quantization tutorial](https://pytorch.org/tutorials/advanced/static_quantization_tutorial.html), cleaned up and modified to use the [Mobilenet v3 model](https://arxiv.org/abs/1905.02244):
