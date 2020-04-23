@@ -24,7 +24,6 @@ from torchvision.models.quantization import googlenet as qgooglenet
 from tvm import autotvm
 from tvm import relay
 from tvm.autotvm.tuner import XGBTuner, GATuner, RandomTuner, GridSearchTuner
-from tvm.relay.frontend.pytorch import get_graph_input_names
 
 from test_util import quantize_model, get_tvm_runtime, get_imagenet_input
 
@@ -112,16 +111,16 @@ def run_tuning(script_module, input_shapes, target, log_file, port, key):
     tune_tasks(tasks, **tuning_option)
 
 
-model_name, raw_model = "resnet18", qresnet.resnet18(pretrained=True).eval()
+# model_name, raw_model = "resnet18", qresnet.resnet18(pretrained=True).eval()
 # model_name, raw_model = "resnet50", qresnet.resnet50(pretrained=True).eval()
-# model_name, raw_model = "mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()
+model_name, raw_model = "mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()
 # model_name, raw_model = "inception_v3", qinception.inception_v3(pretrained=True).eval()
 # model_name, raw_model = "googlenet", qgooglenet(pretrained=True).eval()
 
 data_dir = "imagenet_1k"
 
 # On host, python -m tvm.exec.rpc_tracker --host=0.0.0.0 --port=9190
-# On device, python3 -m tvm.exec.rpc_server --tracker=192.168.129.122:9190 --key=rasp4
+# On device, python3 -m tvm.exec.rpc_server --tracker=192.168.129.117:9190 --key=rasp4
 port = 9190
 key = "rasp4"
 target = "llvm -device=arm_cpu -target=aarch64-unknown-linux-gnu -mattr=+neon"
@@ -136,8 +135,8 @@ quantize_model(data_dir, raw_model, pt_inp, per_channel=False,
 script_module = torch.jit.trace(raw_model, pt_inp).eval()
 
 log_file = "autotvm_logs/%s.log" % model_name
-input_name = get_graph_input_names(script_module)[0]
-input_shapes = {input_name: inp.shape}
+input_name = "input"
+input_shapes = [(input_name, inp.shape)]
 
 run_tuning(script_module, input_shapes, target, log_file, port, key)
 
