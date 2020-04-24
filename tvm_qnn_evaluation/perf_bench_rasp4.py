@@ -23,7 +23,6 @@ from torchvision.models.quantization import inception as qinception
 from torchvision.models.quantization import googlenet as qgooglenet
 
 import tvm
-from tvm.relay.frontend.pytorch import get_graph_input_names
 
 from test_util import quantize_model, get_tvm_runtime, get_imagenet_input
 
@@ -103,8 +102,8 @@ for (model_name, dummy_calib, raw_model) in qmodels:
         continue
 
     log_file = "autotvm_logs/%s.log" % model_name
-    input_name = get_graph_input_names(script_module)[0]
-    runtime, ctx = get_tvm_runtime(script_module, {input_name: inp.shape},
+    input_name = "input"
+    runtime, ctx = get_tvm_runtime(script_module, [(input_name, inp.shape)],
                                    model_name, remote, target, log_file)
     runtime.set_input(input_name, inp)
 
@@ -116,27 +115,27 @@ for model, elapsed in results:
 
 """
 resnet18
-TVM 4T: 107.497946 ms
-TVM 1T: 324.460178 ms
+4T: 128.956701 ms
+1T: 496.865392 ms
 Torch: 389.009070 ms
 
 resnet50
-TVM 4T: 274.470837 ms
-TVM 1T: 931.914834 ms
+4T: 272.631088 ms
+1T: 1027.973033 ms
 Torch: 902.637765 ms
 
 mobilenet v2
-TVM 4T: 49.016217 ms
-TVM 1T: 157.990846 ms
+4T: 35.453969 ms
+1T: 119.203128 ms
 Torch: 88.816326 ms
 
 inception v3
-TVM 4T: 414.570064 ms
-TVM 1T: 1375.075061 ms
+4T: 470.707685 ms
+1T: 1766.515577 ms
 Torch: 1181.927047 ms
 
 googlenet
-TVM 4T: 97.443174 ms
-TVM 1T: 327.224869 ms
+4T: 97.336802 ms
+1T: 360.251145 ms
 Torch: 348.094938 ms
 """

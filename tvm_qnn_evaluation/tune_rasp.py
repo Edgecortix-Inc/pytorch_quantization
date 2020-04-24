@@ -113,9 +113,9 @@ def run_tuning(script_module, input_shapes, target, log_file, port, key):
 
 # model_name, raw_model = "resnet18", qresnet.resnet18(pretrained=True).eval()
 # model_name, raw_model = "resnet50", qresnet.resnet50(pretrained=True).eval()
-model_name, raw_model = "mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()
+# model_name, raw_model = "mobilenet_v2", qmobilenet.mobilenet_v2(pretrained=True).eval()
 # model_name, raw_model = "inception_v3", qinception.inception_v3(pretrained=True).eval()
-# model_name, raw_model = "googlenet", qgooglenet(pretrained=True).eval()
+model_name, raw_model = "googlenet", qgooglenet(pretrained=True).eval()
 
 data_dir = "imagenet_1k"
 
