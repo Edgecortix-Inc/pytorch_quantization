@@ -16,6 +16,7 @@ from packaging import version
 from PIL import Image
 import numpy as np
 
+import tvm
 from tvm import relay
 from tvm.contrib.download import download_testdata
 import tvm.contrib.graph_runtime as runtime
@@ -44,14 +45,19 @@ def get_tvm_runtime(script_module, input_shapes, name,
                     remote, target, log_file):
     mod, params = relay.frontend.from_pytorch(script_module, input_shapes)
 
+    desired_layouts = {'qnn.conv2d': ['NHWC', 'default']}
+    seq = tvm.transform.Sequential([relay.transform.ConvertLayout(desired_layouts)])
+    with tvm.transform.PassContext(opt_level=3):
+        mod = seq(mod)
+
     if os.path.exists(log_file):
         print("Applying log file from %s" % log_file)
         with autotvm.apply_history_best(log_file):
-            with relay.build_config(opt_level=3):
+            with tvm.transform.PassContext(opt_level=3):
                 json, lib, params = relay.build(mod, target=target, params=params)
     else:
         print("Using default schedules")
-        with relay.build_config(opt_level=3):
+        with tvm.transform.PassContext(opt_level=3):
             json, lib, params = relay.build(mod, target=target, params=params)
 
     tmp = tempdir()

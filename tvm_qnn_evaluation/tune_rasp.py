@@ -21,6 +21,7 @@ from torchvision.models.quantization import mobilenet as qmobilenet
 from torchvision.models.quantization import inception as qinception
 from torchvision.models.quantization import googlenet as qgooglenet
 
+import tvm
 from tvm import autotvm
 from tvm import relay
 from tvm.autotvm.tuner import XGBTuner, GATuner, RandomTuner, GridSearchTuner
@@ -87,6 +88,10 @@ def tune_tasks(tasks,
 
 def run_tuning(script_module, input_shapes, target, log_file, port, key):
     mod, params = relay.frontend.from_pytorch(script_module, input_shapes)
+    desired_layouts = {'qnn.conv2d': ['NHWC', 'default']}
+    seq = tvm.transform.Sequential([relay.transform.ConvertLayout(desired_layouts)])
+    with tvm.transform.PassContext(opt_level=3):
+        mod = seq(mod)
 
     tuning_option = {
         'log_filename': log_file,
@@ -123,7 +128,7 @@ data_dir = "imagenet_1k"
 # On device, python3 -m tvm.exec.rpc_server --tracker=192.168.129.117:9190 --key=rasp4
 port = 9190
 key = "rasp4"
-target = "llvm -device=arm_cpu -target=aarch64-unknown-linux-gnu -mattr=+neon"
+target = "llvm -device=arm_cpu -mtriple=aarch64-unknown-linux-gnu -mattr=+neon"
 
 inception = isinstance(raw_model, qinception.QuantizableInception3)
 inp = get_imagenet_input(inception)

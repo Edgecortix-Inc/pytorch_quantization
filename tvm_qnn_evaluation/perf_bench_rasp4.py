@@ -64,11 +64,11 @@ logging.warning(msg)
 
 # Mobilenet v2 was trained using QAT, post training calibration is disabled
 qmodels = [
-    ("resnet18", False, qresnet.resnet18(pretrained=True).eval()),
-    ("resnet50", False, qresnet.resnet50(pretrained=True).eval()),
+    # ("resnet18", False, qresnet.resnet18(pretrained=True).eval()),
+    # ("resnet50", False, qresnet.resnet50(pretrained=True).eval()),
     ("mobilenet_v2", True, qmobilenet.mobilenet_v2(pretrained=True).eval()),
-    ("inception_v3", False, qinception.inception_v3(pretrained=True).eval()),
-    ("googlenet", False, qgooglenet(pretrained=True).eval()),
+    # ("inception_v3", False, qinception.inception_v3(pretrained=True).eval()),
+    # ("googlenet", False, qgooglenet(pretrained=True).eval()),
 ]
 
 data_dir = "imagenet_1k"
@@ -79,9 +79,9 @@ if bench_torch:
 else:
     # Change IP below to rasp4's IP
     # Run "python3 -m tvm.exec.rpc_server --host 0.0.0.0 --port=9090" on the device
-    remote = tvm.rpc.connect("192.168.129.137", 9090)
+    remote = tvm.rpc.connect("192.168.129.58", 9090)
 
-target = "llvm -device=arm_cpu -target=aarch64-unknown-linux-gnu -mattr=+neon"
+target = "llvm -device=arm_cpu -mtriple=aarch64-unknown-linux-gnu -mattr=+neon"
 results = []
 
 for (model_name, dummy_calib, raw_model) in qmodels:
@@ -138,4 +138,34 @@ googlenet
 4T: 97.336802 ms
 1T: 360.251145 ms
 Torch: 348.094938 ms
+"""
+
+"""
+After perf improvement by ARM
+
+resnet18
+4T: 90.678409 ms
+1T: 309.893631 ms
+Torch: 389.009070 ms
+
+resnet50
+4T: 209.967829 ms
+1T: 709.636554 ms
+Torch: 902.637765 ms
+
+mobilenet v2
+4T: 36.034155 ms
+1T: 101.058245 ms
+Torch: 88.816326 ms
+
+inception v3
+4T: 297.150177 ms
+1T: 985.404292 ms
+Torch: 1181.927047 ms
+
+googlenet
+4T: 76.240502 ms
+1T: 263.501820 ms
+Torch: 348.094938 ms
+
 """
