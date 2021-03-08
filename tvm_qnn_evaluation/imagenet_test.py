@@ -22,6 +22,7 @@ from torchvision.models.quantization import resnet as qresnet
 from torchvision.models.quantization import mobilenet as qmobilenet
 from torchvision.models.quantization import inception as qinception
 from torchvision.models.quantization import googlenet as qgooglenet
+from torchvision.models.quantization import mobilenet_v3_large as qmobilenet_v3_large
 
 import tvm
 
@@ -61,9 +62,10 @@ logging.warning(msg)
 qmodels = [
     ("resnet18", False, qresnet.resnet18(pretrained=True).eval()),
     ("resnet50", False, qresnet.resnet50(pretrained=True).eval()),
-    ("mobilenet_v2", True, qmobilenet.mobilenet_v2(pretrained=True).eval()),
+    ("mobilenet_v2 (QAT)", True, qmobilenet.mobilenet_v2(pretrained=True).eval()),
     ("inception_v3", False, qinception.inception_v3(pretrained=True).eval()),
-    ("googlenet", False, qgooglenet(pretrained=True).eval()),
+    ("mobilenet_v3_large (QAT)", True, qmobilenet_v3_large(pretrained=True, quantize=True).eval())
+    # ("googlenet", False, qgooglenet(pretrained=True).eval()), qgooglenet broken in torch-1.7
 ]
 
 if torch_version_check():
@@ -73,7 +75,7 @@ if torch_version_check():
     from qmobilenet_v3 import load_model
 
     model_file = "../data/mobilenetv3small-f3be529c.pth"
-    qmodels.append(("mobilenet_v3 small", False, load_model(model_file).eval()))
+    qmodels.append(("mobilenet_v3_small", False, load_model(model_file).eval()))
 else:
     print("Mobilenet v3 test requires a nightly build via pip, skipping.")
 
@@ -118,9 +120,11 @@ for (model_name, dummy_calib, raw_model) in qmodels:
     inp = get_imagenet_input(inception)
     pt_inp = torch.from_numpy(inp)
 
-    quantize_model(data_dir, raw_model, pt_inp, per_channel=per_channel,
-                   dummy=dummy_calib, max_samples=1000,
-                   use_random_data=use_random_data, inception=inception)
+    if "mobilenet_v3_large" not in model_name:
+        quantize_model(data_dir, raw_model, pt_inp, per_channel=per_channel,
+                       dummy=dummy_calib, max_samples=1000,
+                       use_random_data=use_random_data, inception=inception)
+
     script_module = torch.jit.trace(raw_model, pt_inp).eval()
 
     with torch.no_grad():

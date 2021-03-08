@@ -49,9 +49,6 @@ def print_size_of_model(model):
 
 
 data_dir = "imagenet_1k"
-# for v2
-saved_model_dir = 'data/'
-float_model_file = 'mobilenet_pretrained_float.pth'
 
 # for v3
 saved_model_dir = "data/"
